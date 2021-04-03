@@ -1,6 +1,6 @@
 ;;; javaimp-util.el --- javaimp util  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2019  Free Software Foundation, Inc.
+;; Copyright (C) 2019-2021  Free Software Foundation, Inc.
 
 ;; Author: Filipp Gunbin <fgunbin@fastmail.fm>
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
@@ -82,15 +82,6 @@ the program is not on `exec-path'."
           (javaimp-id-artifact id)
           (javaimp-id-group id)
           (javaimp-id-version id)))
-
-(defun javaimp--get-jdk-jars ()
-  (and javaimp-java-home
-       (file-accessible-directory-p javaimp-java-home)
-       (let ((lib-dir
-	      (concat (file-name-as-directory javaimp-java-home)
-		      (file-name-as-directory "jre")
-		      (file-name-as-directory "lib"))))
-	 (directory-files lib-dir t "\\.jar\\'"))))
 
 
 ;; TODO use functions `cygwin-convert-file-name-from-windows' and
