@@ -49,9 +49,16 @@ resulting module trees."
                             (javaimp--maven-module-from-xml proj-elt file))
                           projects)))
 
-    ;; Set files in a separate step.  "Real" parent of a child (given
-    ;; by <parent>) does not necessary contains the child in its
-    ;; <modules>.
+    ;; Set :file slots in a separate step because Maven doesn't seem
+    ;; to give pom.xml file location for each subproject.  We build
+    ;; tree below by using child->parent links (<parent> in child
+    ;; pom.xml), that also doesn't help to find pom.xml itself.
+    ;; Furthermore, the reverse link (<modules> in parent) may not
+    ;; correspond to a project's real children.  So we take this
+    ;; approach: starting from the top-level pom.xml, descend into
+    ;; children using <modules>.  For each child pom.xml, find its
+    ;; corresponding module by id in the whole module list, and set
+    ;; that module's :file.
     (javaimp--maven-fill-modules-files file modules)
     (when-let ((without-files
                 (seq-filter (lambda (m)
