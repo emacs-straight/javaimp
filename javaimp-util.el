@@ -49,7 +49,9 @@ the program is not on `exec-path'."
   source-dirs build-dir
   dep-jars
   load-ts
-  dep-jars-path-fetcher)
+  dep-jars-path-fetcher
+  raw                                   ;used only during parsing
+  )
 
 (cl-defstruct javaimp-id
   group artifact version)
@@ -129,9 +131,8 @@ buffer and returns its result"
 
 (defun javaimp--split-native-path (path)
   (when path
-    (let ((converted (javaimp-cygpath-convert-maybe path 'unix t))
-	  (sep-regex (concat "[" path-separator "\n" "]+")))
-      (split-string converted sep-regex t))))
+    (delq nil
+          (parse-colon-path (javaimp-cygpath-convert-maybe path 'unix t)))))
 
 (defun javaimp--build-tree (this parent-node all)
   (message "Building tree for module: %s" (javaimp-print-id (javaimp-module-id this)))

@@ -31,64 +31,74 @@ on `exec-path'."
 
 
 (defun javaimp--maven-visit (file)
-  "Calls `mvn help:effective-pom' on FILE,
+  "Calls \"mvn help:effective-pom\" on FILE,
 reads project structure from the output and records which files
-belong to which modules and other module information"
+belong to which modules and other module information.  Returns
+resulting module trees."
   (message "Visiting Maven POM file %s..." file)
-  (let* ((xml-tree (javaimp--call-build-tool javaimp-mvn-program
-                                             #'javaimp--maven-effective-pom-handler
-                                             "-f" (javaimp-cygpath-convert-maybe file)
-                                             "help:effective-pom"))
-	     (projects (javaimp--maven-projects-from-xml xml-tree))
-	     (modules (mapcar (lambda (proj-elt)
+  (let* ((xml-tree (javaimp--call-build-tool
+                    javaimp-mvn-program
+                    #'javaimp--maven-effective-pom-handler
+                    "-f" (javaimp-cygpath-convert-maybe file)
+                    "help:effective-pom"))
+	 (projects (or (if (assq 'project xml-tree)
+                           (list (assq 'project xml-tree))
+                         (javaimp--xml-children (assq 'projects xml-tree) 'project))
+                       (user-error "No projects found")))
+	 (modules (mapcar (lambda (proj-elt)
                             (javaimp--maven-module-from-xml proj-elt file))
-                          projects))
-	     ;; first module is always root
-	     (tree (javaimp--build-tree (car modules) nil modules)))
-    (when tree
-      ;; Set files in a separate step after building the tree because "real"
-      ;; parent of a child (given by <parent>) does not necessary contains the
-      ;; child in its <modules>.  This is rare, but happens.
-      (javaimp--maven-fill-modules-files file tree)
-      ;; check that no :file slot is empty
-      (let ((modules-without-files
-	         (mapcar #'javaimp-node-contents
-		             (javaimp--select-nodes-from-tree
-		              tree (lambda (m)
-			                 (null (javaimp-module-file m)))))))
-	    (if modules-without-files
-	        (error "Cannot find file for module(s): %s"
-		           (mapconcat #'javaimp-module-id modules-without-files ", "))))
-      tree)))
+                          projects)))
+
+    ;; Set files in a separate step.  "Real" parent of a child (given
+    ;; by <parent>) does not necessary contains the child in its
+    ;; <modules>.
+    (javaimp--maven-fill-modules-files file modules)
+    (when-let ((without-files
+                (seq-filter (lambda (m)
+                              (null (javaimp-module-file m)))
+                            modules)))
+      (error "Cannot find file for module(s): %s"
+             (mapconcat (lambda (m)
+                          (javaimp-print-id (javaimp-module-id m)))
+                        without-files
+                        ", ")))
+    (dolist (m modules)
+      (setf (javaimp-module-raw m) nil)) ;no longer need it
+
+    (let ((roots
+           (cons
+            (car modules)               ;first module is always root
+            ;; In some rare cases, a project inside a tree has
+            ;; parent outside the tree (examples: "log4j-bom" in
+            ;; log4j-2.11.2, "external" in jaxb-ri-2.3.3).  Such
+            ;; projects didn't get it into the tree, and we need
+            ;; to add them a separate roots.
+            (seq-filter (lambda (m)
+                          (not (seq-find (lambda (aux)
+                                           (equal (javaimp-module-id aux)
+                                                  (javaimp-module-parent-id m)))
+                                         modules)))
+		        (cdr modules)))))
+      (mapcar (lambda (root)
+                (javaimp--build-tree root nil modules))
+              roots))))
 
 (defun javaimp--maven-effective-pom-handler ()
   (let ((start
-	     (save-excursion
-	       (progn
-	         (goto-char (point-min))
-	         (re-search-forward "<\\?xml\\|<projects?")
-	         (match-beginning 0))))
-	    (end
-	     (save-excursion
-	       (progn
-	         (goto-char (point-min))
-	         (re-search-forward "<\\(projects?\\)")
-	         ;; corresponding close tag is the end of parse region
-	         (search-forward (concat "</" (match-string 1) ">"))
-	         (match-end 0)))))
+	 (save-excursion
+	   (progn
+	     (goto-char (point-min))
+	     (re-search-forward "<\\?xml\\|<projects?")
+	     (match-beginning 0))))
+	(end
+	 (save-excursion
+	   (progn
+	     (goto-char (point-min))
+	     (re-search-forward "<\\(projects?\\)")
+	     ;; corresponding close tag is the end of parse region
+	     (search-forward (concat "</" (match-string 1) ">"))
+	     (match-end 0)))))
     (xml-parse-region start end)))
-
-(defun javaimp--maven-projects-from-xml (tree)
-  "Analyzes result of `mvn help:effective-pom' and returns list
-of <project> elements"
-  (let ((project (assq 'project tree))
-	    (projects (assq 'projects tree)))
-    (cond (project
-	       (list project))
-	      (projects
-	       (javaimp--xml-children projects 'project))
-	      (t
-	       (error "Neither <project> nor <projects> was found in pom")))))
 
 (defun javaimp--maven-module-from-xml (elt file-orig)
   (let ((build-elt (javaimp--xml-child 'build elt)))
@@ -101,26 +111,27 @@ of <project> elements"
      :file-orig file-orig
      ;; jar/war supported
      :final-name (let ((packaging (or (javaimp--xml-first-child
-		                               (javaimp--xml-child 'packaging elt))
+		                       (javaimp--xml-child 'packaging elt))
                                       "jar")))
                    (when (member packaging '("jar" "war"))
                      (concat (javaimp--xml-first-child
                               (javaimp--xml-child 'finalName build-elt))
                              "." packaging)))
      :source-dirs (list (file-name-as-directory
-		                 (javaimp-cygpath-convert-maybe
-		                  (javaimp--xml-first-child
-		                   (javaimp--xml-child 'sourceDirectory build-elt))))
-                        (file-name-as-directory
-		                 (javaimp-cygpath-convert-maybe
-			              (javaimp--xml-first-child
-			               (javaimp--xml-child 'testSourceDirectory build-elt)))))
-     :build-dir (file-name-as-directory
 		         (javaimp-cygpath-convert-maybe
-		          (javaimp--xml-first-child (javaimp--xml-child 'directory build-elt))))
+		          (javaimp--xml-first-child
+		           (javaimp--xml-child 'sourceDirectory build-elt))))
+                        (file-name-as-directory
+		         (javaimp-cygpath-convert-maybe
+			  (javaimp--xml-first-child
+			   (javaimp--xml-child 'testSourceDirectory build-elt)))))
+     :build-dir (file-name-as-directory
+		 (javaimp-cygpath-convert-maybe
+		  (javaimp--xml-first-child (javaimp--xml-child 'directory build-elt))))
      :dep-jars nil          ; dep-jars is initialized lazily on demand
      :load-ts (current-time)
-     :dep-jars-path-fetcher #'javaimp--maven-fetch-dep-jars-path)))
+     :dep-jars-path-fetcher #'javaimp--maven-fetch-dep-jars-path
+     :raw elt)))
 
 (defun javaimp--maven-id-from-xml (elt)
   (make-javaimp-id
@@ -128,53 +139,66 @@ of <project> elements"
    :artifact (javaimp--xml-first-child (javaimp--xml-child 'artifactId elt))
    :version (javaimp--xml-first-child (javaimp--xml-child 'version elt))))
 
-(defun javaimp--maven-fill-modules-files (file tree)
-  ;; Reads module id from FILE, looks up corresponding module in TREE, sets its
-  ;; :file slot, then recurses for each submodule.  A submodule file path is
-  ;; constructed by appending relative path taken from <module> to FILE's
-  ;; directory.
+(defun javaimp--maven-fill-modules-files (file modules)
+  ;; Reads module id from FILE, looks up corresponding module in
+  ;; MODULES, sets its :file slot, then recurses for each submodule.
+  ;; A submodule file path is constructed by appending relative path
+  ;; taken from <module> to FILE's directory.
   (let* ((xml-tree (with-temp-buffer
-		             (insert-file-contents file)
-		             (xml-parse-region (point-min) (point-max))))
-	     (project-elt (assq 'project xml-tree))
-	     (this-id (javaimp--maven-id-from-xml project-elt))
-	     ;; seems that the only mandatory component in tested ids is artifact, while
-	     ;; group and version may be inherited and thus not presented in pom.xml
-	     (id-pred (if (or (null (javaimp-id-group this-id))
-			              (null (javaimp-id-version this-id)))
-		              (progn
-			            (message "File %s contains incomplete id, will check artifact only" file)
-			            (lambda (tested-id)
-			              (equal (javaimp-id-artifact this-id)
-				                 (javaimp-id-artifact tested-id))))
-		            (lambda (tested-id)
-		              (equal this-id tested-id))))
-	     (module
-	      (javaimp-node-contents
-	       (or (javaimp--find-node-in-tree
-		        tree (lambda (m)
-		               (funcall id-pred (javaimp-module-id m))))
-	           (error "Cannot find module for id %s (taken from file %s)" this-id file)))))
+		     (insert-file-contents file)
+		     (xml-parse-region (point-min) (point-max))))
+	 (project-elt (assq 'project xml-tree))
+	 (this-id (javaimp--maven-id-from-xml project-elt))
+         (module (seq-find
+                  (lambda (m)
+                    (let ((mid (javaimp-module-id m)))
+                      (and (equal (javaimp-id-artifact this-id)
+				  (javaimp-id-artifact mid))
+	                   ;; Group and version may be inherited and
+	                   ;; thus not presented in file
+                           (or (null (javaimp-id-group this-id))
+                               (equal (javaimp-id-group this-id)
+				      (javaimp-id-group mid)))
+                           (or (null (javaimp-id-version this-id))
+                               (equal (javaimp-id-version this-id)
+				      (javaimp-id-version mid))))))
+                  modules)))
+    (unless module
+      (error "Cannot find module corresponding to file \"%s\" (id %s)"
+             file (javaimp-print-id this-id)))
+    (and (null (javaimp-id-group this-id))
+         (null (javaimp-id-version this-id))
+         (message "File \"%s\" contains incomplete id, used lax matching" file))
+
     (setf (javaimp-module-file module) file)
+
+    ;; Take <module> subelements from raw project, not from file,
+    ;; because Maven can extend the list with elements from profiles.
     (let ((rel-paths
-	       (mapcar #'javaimp--xml-first-child
-		           (javaimp--xml-children (javaimp--xml-child 'modules project-elt) 'module))))
+           (mapcar #'javaimp--xml-first-child
+		   (javaimp--xml-children
+                    (javaimp--xml-child 'modules (javaimp-module-raw module))
+                    'module))))
+      ;; recurse into each child <module>
       (dolist (rel-path rel-paths)
-	    (javaimp--maven-fill-modules-files (concat (file-name-directory file)
-						                           (file-name-as-directory rel-path)
-						                           "pom.xml")
-					                       tree)))))
+	(javaimp--maven-fill-modules-files
+         (concat (file-name-directory file)
+                 (mapconcat #'file-name-as-directory
+                            (split-string rel-path "[/\\\\]+" t) nil)
+		 "pom.xml")
+	 modules)))))
 
 (defun javaimp--maven-fetch-dep-jars-path (module)
-  (javaimp--call-build-tool javaimp-mvn-program
-                            (lambda ()
-                              (goto-char (point-min))
-                              (search-forward "Dependencies classpath:")
-                              (forward-line 1)
-                              (thing-at-point 'line))
-                            ;; always invoke for this module's pom.ml
-                            "-f" (javaimp-cygpath-convert-maybe
-                                  (javaimp-module-file module))
-                            "dependency:build-classpath"))
+  (javaimp--call-build-tool
+   javaimp-mvn-program
+   (lambda ()
+     (goto-char (point-min))
+     (search-forward "Dependencies classpath:")
+     (forward-line 1)
+     (thing-at-point 'line))
+   ;; always invoke for this module's pom.ml
+   "-f" (javaimp-cygpath-convert-maybe
+         (javaimp-module-file module))
+   "dependency:build-classpath"))
 
 (provide 'javaimp-maven)

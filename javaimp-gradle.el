@@ -86,7 +86,8 @@ information."
                 (cdr (assq 'build-dir alist))))
    :dep-jars (javaimp--split-native-path (cdr (assq 'dep-jars alist)))
    :load-ts (current-time)
-   :dep-jars-path-fetcher #'javaimp--gradle-fetch-dep-jars-path))
+   :dep-jars-path-fetcher #'javaimp--gradle-fetch-dep-jars-path
+   :raw nil))
 
 (defun javaimp--gradle-id-from-semi-separated (str)
   (when str
@@ -122,14 +123,15 @@ information."
                                         (javaimp--gradle-init-script-kotlin init-script-body)
                                       (javaimp--gradle-init-script init-script-body))))
          (local-gradlew (concat (file-name-directory file) "gradlew")))
-    (javaimp--call-build-tool (if (file-exists-p local-gradlew)
-                                  local-gradlew
-                                javaimp-gradle-program)
-                              handler
-                              "-q"
-                              "-b" (javaimp-cygpath-convert-maybe file)
-                              "-I" (javaimp-cygpath-convert-maybe init-file)
-                              task)))
+    (javaimp--call-build-tool
+     (if (file-exists-p local-gradlew)
+         local-gradlew
+       javaimp-gradle-program)
+     handler
+     "-q"
+     "-b" (javaimp-cygpath-convert-maybe file)
+     "-I" (javaimp-cygpath-convert-maybe init-file)
+     task)))
 
 
 (defun javaimp--gradle-init-script (body)

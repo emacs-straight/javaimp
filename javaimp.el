@@ -90,7 +90,9 @@
 projects"
   :group 'c)
 
-(defcustom javaimp-import-group-alist '(("\\`java\\." . 10) ("\\`javax\\." . 15))
+(defcustom javaimp-import-group-alist
+  '(("\\`java\\." . 10)
+    ("\\`javax\\." . 15))
   "Specifies how to group classes and how to order resulting
 groups in the imports list.
 
@@ -174,23 +176,28 @@ any module file."
   (interactive "DVisit Maven or Gradle project in directory: ")
   (let* ((exp-dir (expand-file-name (file-name-as-directory dir)))
          build-file
-         (tree (cond
-                ((file-readable-p (setq build-file (concat exp-dir "pom.xml")))
-                 (javaimp--maven-visit build-file))
-                ((or (file-readable-p (setq build-file (concat exp-dir "build.gradle")))
-                     (file-readable-p (setq build-file (concat exp-dir "build.gradle.kts"))))
-                 (javaimp--gradle-visit build-file))
-                (t
-                 (error "Could not find build file in dir %s" dir)))))
-    (when tree
-      ;; delete previous tree(s) loaded from this build file, if any
-      (setq javaimp-project-forest
-	    (seq-remove (lambda (tree)
-			  (equal (javaimp-module-file-orig (javaimp-node-contents tree))
-			         build-file))
-		        javaimp-project-forest))
-      (push tree javaimp-project-forest)
-      (message "Loaded tree for %s" dir))))
+         (trees (cond
+                 ((file-regular-p (setq build-file (concat exp-dir "pom.xml")))
+                  (javaimp--maven-visit build-file))
+                 ((or (file-regular-p
+                       (setq build-file (concat exp-dir "build.gradle")))
+                      (file-regular-p
+                       (setq build-file (concat exp-dir "build.gradle.kts"))))
+                  (list (javaimp--gradle-visit build-file)))
+                 (t
+                  (error "Could not find build file in dir %s" dir)))))
+    ;; delete previous tree(s) loaded from this build file, if any
+    (setq javaimp-project-forest
+	  (seq-remove (lambda (node)
+			(equal (javaimp-module-file-orig (javaimp-node-contents node))
+			       build-file))
+		      javaimp-project-forest))
+    (push (car trees) javaimp-project-forest)
+    (dolist (node (cdr trees))
+      (when (y-or-n-p (format "Include additional project tree rooted at %s? "
+                              (javaimp-module-id (javaimp-node-contents node))))
+        (push node javaimp-project-forest)))
+    (message "Loaded tree for %s" dir)))
 
 
 ;; Dependency jars
