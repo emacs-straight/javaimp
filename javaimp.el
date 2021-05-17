@@ -143,6 +143,12 @@ Customize it if the program is not on `exec-path'."
   :group 'javaimp
   :type 'string)
 
+(defcustom javaimp-jmod-program "jmod"
+  "Path to the `jmod' program used to read contents of jmod files.
+Customize it if the program is not on `exec-path'."
+  :group 'javaimp
+  :type 'string)
+
 (defcustom javaimp-include-current-module-classes t
   "If non-nil, current module's classes are included into
 completion alternatives.  `javaimp-add-import' will find all java
@@ -252,20 +258,31 @@ any module file."
     (javaimp-cached-jar-classes cached)))
 
 (defun javaimp--fetch-jar-classes (file)
-  (message "Reading classes in file: %s" file)
-  (with-temp-buffer
-    (let ((coding-system-for-read (and (eq system-type 'cygwin) 'utf-8-dos)))
-      ;; on cygwin, "jar" is a windows program, so file path needs to be
-      ;; converted appropriately.
-      (process-file javaimp-jar-program nil t nil
-		    ;; `jar' accepts commands/options as a single string
-		    "tf" (javaimp-cygpath-convert-maybe file 'windows))
+  (let ((ext (downcase (file-name-extension file))))
+    (unless (member ext '("jar" "jmod"))
+      (error "Unexpected file name: %s" file))
+    (message "Reading classes in file: %s" file)
+    (with-temp-buffer
+      (let ((coding-system-for-read (when (eq system-type 'cygwin)
+                                      'utf-8-dos)))
+        (process-file
+         (symbol-value (intern (format "javaimp-%s-program" ext)))
+         nil
+         t
+         nil
+         (if (equal ext "jar") "tf" "list")
+         ;; On cygwin, "jar/jmod" is a windows program, so file path
+         ;; needs to be converted appropriately.
+         (javaimp-cygpath-convert-maybe file 'windows)))
       (goto-char (point-min))
-      (while (search-forward "/" nil t)
-	(replace-match "."))
-      (goto-char (point-min))
+      (save-excursion
+        (while (re-search-forward "^classes/" nil t)
+	  (replace-match "")))
+      (save-excursion
+        (while (search-forward "/" nil t)
+	  (replace-match ".")))
       (let (result)
-	(while (re-search-forward "\\(^[[:alnum:]._]+\\)\\.class$" nil t)
+	(while (re-search-forward "^\\([[:alnum:]._]+\\)\\.class$" nil t)
 	  (push (match-string 1) result))
 	result))))
 
@@ -328,12 +345,12 @@ completion) and calling `javaimp-organize-imports'.
 Completion alternatives are constructed as follows:
 
 - If `javaimp-java-home' is set then add JDK classes.  lib-dir is
-\"jre/lib\" or \"lib\" subdirectory.  First, attempt to read
-\"lib-dir/classlist\" file.  If there's no such file - fallback
-to reading all jar files in lib-dir.
+\"jre/lib\" or \"lib\" subdirectory.  First, attempt to read jmod
+files in \"lib-dir/jmods\" subdirectory.  If there's jmods
+subdirectory - fallback to reading all jar files in lib-dir.
 
 - If current module can be determined, then add all classes from
-its dependencies.
+sits dependencies.
 
 - If `javaimp-include-current-module-classes' is set, then add
 current module's top-level classes.  If there's no current
@@ -390,30 +407,23 @@ prefix arg is given, don't do this filtering."
 
 (defun javaimp--get-jdk-classes ()
   (when javaimp-java-home
-    (or (file-accessible-directory-p javaimp-java-home)
-        (user-error "Java home directory \"%s\" is not accessible" javaimp-java-home))
-    (let ((lib-dir
-           (mapconcat #'file-name-as-directory
-                      (list javaimp-java-home "jre" "lib") nil))) ;pre-java9
-      (unless (file-directory-p lib-dir)
-        (setq lib-dir
-              (mapconcat #'file-name-as-directory
-                         (list javaimp-java-home "lib") nil)) ;java9 and later
-        (or (file-directory-p lib-dir)
-            (user-error "JDK lib dir \"%s\" doesn't exist" lib-dir)))
-      (if (file-exists-p (concat lib-dir "classlist"))
-          ;; If classlist exists, read it
-          (with-temp-buffer
-            (insert-file-contents (concat lib-dir "classlist"))
-            (while (search-forward "/" nil t)
-	      (replace-match "."))
-            (split-string (buffer-string) "\n" t))
-        ;; Otherwise, read jars, if any.  In pre-jdk9 versions, they
-        ;; used to contain actual classes.
-        (message "classlist file not found, fallback to reading jars from \"%s\"" lib-dir)
-        (apply #'append
-	       (mapcar #'javaimp--get-jar-classes
-                       (directory-files lib-dir t "\\.jar\\'")))))))
+    (unless (file-accessible-directory-p javaimp-java-home)
+      (user-error "Java home directory \"%s\" is not accessible" javaimp-java-home))
+    (let ((dir (concat (file-name-as-directory javaimp-java-home) "jmods")))
+      (if (file-directory-p dir)
+          ;; java9 and later contain modules, scan them
+          (apply #'append
+	         (mapcar #'javaimp--get-jar-classes
+                         (directory-files dir t "\\.jmod\\'")))
+        ;; pre-jdk9
+        (setq dir (mapconcat #'file-name-as-directory
+                             `(,javaimp-java-home "jre" "lib") nil))
+        (message "jmods directory not found, fallback to reading jars from \"%s\"" dir)
+        (if (file-directory-p dir)
+            (apply #'append
+	           (mapcar #'javaimp--get-jar-classes
+                           (directory-files dir t "\\.jar\\'")))
+          (user-error "JRE lib dir \"%s\" doesn't exist" dir))))))
 
 (defun javaimp--get-module-classes (module)
   "Returns list of top-level classes in current module"

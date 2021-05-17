@@ -56,7 +56,7 @@ the program is not on `exec-path'."
 (cl-defstruct javaimp-id
   group artifact version)
 
-(cl-defstruct javaimp-cached-jar
+(cl-defstruct javaimp-cached-jar        ;jar or jmod
   file read-ts classes)
 
 
