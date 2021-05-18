@@ -131,8 +131,11 @@ buffer and returns its result"
 
 (defun javaimp--split-native-path (path)
   (when path
-    (delq nil
-          (parse-colon-path (javaimp-cygpath-convert-maybe path 'unix t)))))
+    ;; don't use parse-colon-path because it makes resulting elements
+    ;; to be directories
+    (split-string (javaimp-cygpath-convert-maybe path 'unix t)
+                  (concat "[" path-separator "\n]+")
+                  t)))
 
 (defun javaimp--build-tree (this parent-node all)
   (message "Building tree for module: %s" (javaimp-print-id (javaimp-module-id this)))
