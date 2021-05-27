@@ -6,7 +6,7 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
-(require 'javaimp-maven)
+(require 'javaimp)
 
 (ert-deftest javaimp-test--maven-projects-from-xml--project ()
   (with-temp-buffer
@@ -21,3 +21,23 @@
     (let ((projects (javaimp--maven-projects-from-xml
 		     (xml-parse-region (point-min) (point-max)))))
       (should (eql (length projects) 2)))))
+
+
+(ert-deftest javaimp-test--get-package ()
+  (with-temp-buffer
+    (insert "//package org.commented1;
+/*package org.commented2;*/
+  package org.foo;")
+    (should (equal (javaimp--get-package) "org.foo"))))
+
+(ert-deftest javaimp-test--get-file-classes ()
+  (should (equal (javaimp--get-file-classes
+                  (concat javaimp--basedir "testdata/test-get-file-classes-1.java"))
+                 '("org.foo.Top"
+                   "org.foo.Top.CInner1"
+                   "org.foo.Top.CInner1.CInner1_CInner1"
+                   "org.foo.Top.IInner1"
+                   "org.foo.Top.IInner1.IInner1_IInner1"
+                   "org.foo.Top.IInner1.IInner1_CInner1"
+                   "org.foo.Top.EInner1"
+                   "org.foo.Top.EInner1.EInner1_EInner1"))))

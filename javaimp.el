@@ -49,9 +49,6 @@
 ;; from the build tool again.  If a jar file was changed, its contents
 ;; are re-read.
 ;;
-;; Currently inner classes are filtered out from completion alternatives.
-;; You can always import top-level class and use qualified name.
-;;
 ;;
 ;;   Example:
 ;;
@@ -275,16 +272,24 @@ any module file."
          ;; needs to be converted appropriately.
          (javaimp-cygpath-convert-maybe file 'windows)))
       (goto-char (point-min))
-      (save-excursion
-        (while (re-search-forward "^classes/" nil t)
-	  (replace-match "")))
-      (save-excursion
-        (while (search-forward "/" nil t)
-	  (replace-match ".")))
-      (let (result)
-	(while (re-search-forward "^\\([[:alnum:]._]+\\)\\.class$" nil t)
-	  (push (match-string 1) result))
-	result))))
+      (let (result curr)
+	(while (re-search-forward
+                (rx (and bol
+                         (? "classes/") ; prefix output by jmod
+                         (group (+ (any alnum "_/$")))
+                         ".class"
+                         eol))
+                nil t)
+          (setq curr (match-string 1))
+          (unless (or (string-suffix-p "module-info" curr)
+                      (string-suffix-p "package-info" curr)
+                      ;; like Provider$1.class
+                      (string-match-p "\\$[[:digit:]]" curr))
+            (push
+             (string-replace "/" "."
+                             (string-replace "$" "." curr))
+             result)))
+        result))))
 
 
 ;; Tree search routines
@@ -353,12 +358,11 @@ subdirectory - fallback to reading all jar files in lib-dir.
 sits dependencies.
 
 - If `javaimp-include-current-module-classes' is set, then add
-current module's top-level classes.  If there's no current
-module, then add all top-level classes from the current file
-tree: if there's a \"package\" directive in the current file and
-it matches last components of the file name, then file tree
-starts in the parent directory of the package, otherwise just use
-current directory.
+current module's classes.  If there's no current module, then add
+all classes from the current file tree: if there's a \"package\"
+directive in the current file and it matches last components of
+the file name, then file tree starts in the parent directory of
+the package, otherwise just use current directory.
 
 - Keep only candidates whose class simple name (last component of
 a fully-qualified name) matches current `symbol-at-point'.  If a
@@ -426,38 +430,30 @@ prefix arg is given, don't do this filtering."
           (user-error "JRE lib dir \"%s\" doesn't exist" dir))))))
 
 (defun javaimp--get-module-classes (module)
-  "Returns list of top-level classes in current module"
+  "Returns list of classes in current module"
   (append
    ;; source dirs
-   (seq-mapcat (lambda (dir)
-                 (and (file-accessible-directory-p dir)
-	              (javaimp--get-directory-classes dir)))
+   (seq-mapcat #'javaimp--get-directory-classes
                (javaimp-module-source-dirs module))
    ;; additional source dirs
    (seq-mapcat (lambda (rel-dir)
-                 (let ((dir (concat (javaimp-module-build-dir module)
-                                    (file-name-as-directory rel-dir))))
-	           (and (file-accessible-directory-p dir)
-                        (javaimp--get-directory-classes dir))))
+                 (javaimp--get-directory-classes
+                  (concat (javaimp-module-build-dir module)
+                          (file-name-as-directory rel-dir))))
                javaimp-additional-source-dirs)))
 
 (defun javaimp--dir-above-current-package ()
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (when (re-search-forward "^\\s *package\\s +\\([^;]+\\)\\s *;" nil t)
-        (string-remove-suffix
-         (mapconcat #'file-name-as-directory
-                    (split-string (match-string 1) "\\." t) nil)
-         default-directory)))))
+  (let ((package (javaimp--get-package)))
+    (when package
+      (string-remove-suffix
+       (mapconcat #'file-name-as-directory
+                  (split-string package "\\." t) nil)
+       default-directory))))
 
 (defun javaimp--get-directory-classes (dir)
-  (mapcar (lambda (filename)
-            (replace-regexp-in-string
-             "[/\\]+" "."
-             (string-remove-prefix dir (file-name-sans-extension filename))))
-          (directory-files-recursively dir "\\.java\\'")))
+  (if (file-accessible-directory-p dir)
+      (seq-mapcat #'javaimp--get-file-classes
+                  (directory-files-recursively dir "\\.java\\'"))))
 
 
 ;; Organizing imports
