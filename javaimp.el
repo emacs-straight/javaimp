@@ -403,8 +403,9 @@ prefix arg is given, don't do this filtering."
           (completion-regexp-list
            (and (not current-prefix-arg)
                 (symbol-at-point)
-                (let ((prefix (regexp-quote (symbol-name (symbol-at-point)))))
-                  (list (concat "\\." prefix "[^.]*$\\|^" prefix "[^.]*$"))))))
+                (list (rx (and symbol-start
+                               (literal (symbol-name (symbol-at-point)))
+                               eol))))))
      (list (completing-read "Import: " classes nil t nil nil
                             (symbol-name (symbol-at-point))))))
   (javaimp-organize-imports (cons classname 'ordinary)))
@@ -453,7 +454,9 @@ prefix arg is given, don't do this filtering."
 (defun javaimp--get-directory-classes (dir)
   (if (file-accessible-directory-p dir)
       (seq-mapcat #'javaimp--get-file-classes
-                  (directory-files-recursively dir "\\.java\\'"))))
+                  (seq-filter (lambda (file)
+                                (not (file-symlink-p file)))
+                              (directory-files-recursively dir "\\.java\\'")))))
 
 
 ;; Organizing imports
