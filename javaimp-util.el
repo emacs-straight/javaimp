@@ -157,56 +157,4 @@ buffer and returns its result"
       (setf (javaimp-node-children this-node) child-nodes)
       this-node)))
 
-
-;; Java source parsing
-
-(defun javaimp--get-package ()
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (catch 'found
-        (while (re-search-forward "^\\s *package\\s +\\([^;]+\\)\\s *;" nil t)
-          (let ((state (syntax-ppss)))
-            (unless (syntax-ppss-context state)
-              (throw 'found (match-string 1)))))))))
-
-(defun javaimp--get-file-classes (file)
-  (with-temp-buffer
-    (insert-file-contents file)
-    (let ((parse-sexp-ignore-comments t)
-          (class-re (concat
-                     (regexp-opt '("class" "interface" "enum") 'words)
-                     (rx (and (+ (syntax whitespace))
-                              (group (+ (any alnum ?_)))))))
-          res)
-      (while (re-search-forward class-re nil t)
-        (let ((state (syntax-ppss))
-              curr)
-          (unless (syntax-ppss-context state)
-            (setq curr (list (match-string 2)))
-            ;; collect enclosing classes, if any
-            (save-excursion
-              (catch 'stop
-                (while (nth 1 state)
-                  ;; find innermost enclosing open-bracket
-                  (goto-char (nth 1 state))
-                  (if (and (= (char-after) ?{)
-                           (re-search-backward class-re nil t)
-                           ;; if there's no paren in between - assume
-                           ;; it's a valid class (not a method - this
-                           ;; way we exclude local classes)
-                           (not (save-match-data
-                                  (search-forward "(" (nth 1 state) t))))
-                      (progn
-                        (push (match-string 2) curr)
-                        (setq state (syntax-ppss)))
-                    (setq curr nil)
-                    (throw 'stop nil)))))
-            (when curr
-              (let ((package (javaimp--get-package)))
-                (if package (push package curr)))
-              (push (mapconcat #'identity curr ".") res)))))
-      (nreverse res))))
-
 (provide 'javaimp-util)

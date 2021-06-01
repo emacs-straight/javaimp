@@ -23,15 +23,15 @@
       (should (eql (length projects) 2)))))
 
 
-(ert-deftest javaimp-test--get-package ()
+(ert-deftest javaimp-test--parse-get-package ()
   (with-temp-buffer
     (insert "//package org.commented1;
 /*package org.commented2;*/
   package org.foo;")
-    (should (equal (javaimp--get-package) "org.foo"))))
+    (should (equal (javaimp--parse-get-package) "org.foo"))))
 
-(ert-deftest javaimp-test--get-file-classes ()
-  (should (equal (javaimp--get-file-classes
+(ert-deftest javaimp-test--parse-get-file-classes ()
+  (should (equal (javaimp--parse-get-file-classes
                   (concat javaimp--basedir "testdata/test-get-file-classes-1.java"))
                  '("org.foo.Top"
                    "org.foo.Top.CInner1"

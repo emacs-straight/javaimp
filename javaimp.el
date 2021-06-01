@@ -77,6 +77,7 @@
 
 (require 'javaimp-maven)
 (require 'javaimp-gradle)
+(require 'javaimp-parse)
 
 
 
@@ -444,7 +445,7 @@ prefix arg is given, don't do this filtering."
                javaimp-additional-source-dirs)))
 
 (defun javaimp--dir-above-current-package ()
-  (let ((package (javaimp--get-package)))
+  (let ((package (javaimp--parse-get-package)))
     (when package
       (string-remove-suffix
        (mapconcat #'file-name-as-directory
@@ -453,7 +454,7 @@ prefix arg is given, don't do this filtering."
 
 (defun javaimp--get-directory-classes (dir)
   (if (file-accessible-directory-p dir)
-      (seq-mapcat #'javaimp--get-file-classes
+      (seq-mapcat #'javaimp--parse-get-file-classes
                   (seq-filter (lambda (file)
                                 (not (file-symlink-p file)))
                               (directory-files-recursively dir "\\.java\\'")))))
