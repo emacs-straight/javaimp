@@ -137,6 +137,10 @@ buffer and returns its result"
                   (concat "[" path-separator "\n]+")
                   t)))
 
+
+
+;; Tree building & search
+
 (defun javaimp--build-tree (this parent-node all)
   (message "Building tree for module: %s" (javaimp-print-id (javaimp-module-id this)))
   (let ((children
@@ -156,5 +160,39 @@ buffer and returns its result"
 		    children)))
       (setf (javaimp-node-children this-node) child-nodes)
       this-node)))
+
+(defun javaimp--find-node (predicate forest)
+  (catch 'found
+    (dolist (tree forest)
+      (javaimp--find-node-in-tree-1 tree predicate))))
+
+(defun javaimp--find-node-in-tree-1 (tree predicate)
+  (when tree
+    (if (funcall predicate (javaimp-node-contents tree))
+	(throw 'found tree))
+    (dolist (child (javaimp-node-children tree))
+      (javaimp--find-node-in-tree-1 child predicate))))
+
+
+(defun javaimp--collect-nodes (predicate forest)
+  (apply #'seq-concatenate 'list
+	 (mapcar (lambda (tree)
+		   (javaimp--collect-nodes-from-tree tree predicate))
+		 forest)))
+
+(defun javaimp--collect-nodes-from-tree (tree &optional predicate)
+  (when tree
+    (append (when (or (not predicate)
+                      (funcall predicate (javaimp-node-contents tree)))
+	      (list tree))
+	    (apply #'seq-concatenate 'list
+		   (mapcar (lambda (child)
+			     (javaimp--collect-nodes-from-tree child predicate))
+			   (javaimp-node-children tree))))))
+
+(defun javaimp--get-root (node)
+  (while (javaimp-node-parent node)
+    (setq node (javaimp-node-parent node)))
+  node)
 
 (provide 'javaimp-util)

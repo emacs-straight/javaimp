@@ -58,9 +58,9 @@
 ;; (setq javaimp-additional-source-dirs '("generated-sources/thrift"))
 ;; (add-hook 'java-mode-hook
 ;; 	  (lambda ()
-;; 	    (local-set-key "\C-ci" 'javaimp-add-import)
-;; 	    (local-set-key "\C-co" 'javaimp-organize-imports)))
-;; (global-set-key (kbd "C-c j v") 'javaimp-visit-project)
+;; 	    (local-set-key "\C-ci" #'javaimp-add-import)
+;; 	    (local-set-key "\C-co" #'javaimp-organize-imports)))
+;; (global-set-key (kbd "C-c j v") #'javaimp-visit-project)
 ;;
 
 ;;; News:
@@ -198,7 +198,7 @@ any module file."
 		      javaimp-project-forest))
     (push (car trees) javaimp-project-forest)
     (dolist (node (cdr trees))
-      (when (y-or-n-p (format "Include additional project tree rooted at %s? "
+      (when (y-or-n-p (format "Include additional project tree rooted at %S? "
                               (javaimp-module-id (javaimp-node-contents node))))
         (push node javaimp-project-forest)))
     (message "Loaded tree for %s" dir)))
@@ -293,52 +293,18 @@ any module file."
         result))))
 
 
-;; Tree search routines
-
-(defun javaimp--find-node (predicate)
-  (catch 'found
-    (dolist (tree javaimp-project-forest)
-      (javaimp--find-node-in-tree-1 tree predicate))))
-
-(defun javaimp--select-nodes (predicate)
-  (apply #'seq-concatenate 'list
-	 (mapcar (lambda (tree)
-		   (javaimp--select-nodes-from-tree tree predicate))
-		 javaimp-project-forest)))
-
-(defun javaimp--find-node-in-tree (tree predicate)
-  (catch 'found
-    (javaimp--find-node-in-tree-1 tree predicate)))
-
-(defun javaimp--find-node-in-tree-1 (tree predicate)
-  (when tree
-    (if (funcall predicate (javaimp-node-contents tree))
-	(throw 'found tree))
-    (dolist (child (javaimp-node-children tree))
-      (javaimp--find-node-in-tree-1 child predicate))))
-
-(defun javaimp--select-nodes-from-tree (tree predicate)
-  (when tree
-    (append (if (funcall predicate (javaimp-node-contents tree))
-		(list tree))
-	    (apply #'seq-concatenate 'list
-		   (mapcar (lambda (child)
-			     (javaimp--select-nodes-from-tree child predicate))
-			   (javaimp-node-children tree))))))
-
-
 ;; Some API functions
-
+;;
 ;; do not expose tree structure, return only modules
 
 (defun javaimp-find-module (predicate)
-  (let ((node (javaimp--find-node predicate)))
+  (let ((node (javaimp--find-node predicate javaimp-project-forest)))
     (and node
 	 (javaimp-node-contents node))))
 
-(defun javaimp-select-modules (predicate)
+(defun javaimp-collect-modules (predicate)
   (mapcar #'javaimp-node-contents
-	  (javaimp--select-nodes predicate)))
+	  (javaimp--collect-nodes predicate javaimp-project-forest)))
 
 
 ;;; Adding imports
@@ -375,7 +341,8 @@ prefix arg is given, don't do this filtering."
 		 (lambda (m)
                    (seq-some (lambda (dir)
                                (string-prefix-p dir file))
-                             (javaimp-module-source-dirs m)))))
+                             (javaimp-module-source-dirs m)))
+                 javaimp-project-forest))
           (module (when node
                     (javaimp--update-module-maybe node)
                     (javaimp-node-contents node)))

@@ -41,7 +41,9 @@ present."
 (defconst javaimp--parse-class-keywords
   '("class" "interface" "enum"))
 (defconst javaimp--parse-stmt-keywords
-  '("if" "for" "while" "switch" "try" "catch"))
+  '("if" "for" "while" "switch" "try" "catch" "finally"
+    "static"                            ;static initializer block
+    ))
 
 (defun javaimp--parse-block-re (keywords)
   (concat
