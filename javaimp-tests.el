@@ -23,6 +23,56 @@
 ;;       (should (eql (length projects) 2)))))
 
 
+(defun javaimp-test--check-scope (parse-hook test-data)
+  (declare (indent 1))
+  (dolist (data test-data)
+    (with-temp-buffer
+      (insert (nth 0 data))
+      (java-mode)
+      (let* ((parse-sexp-ignore-comments t) ;FIXME remove with major mode
+             (parse-sexp-lookup-properties nil)
+             (javaimp--parse-scope-hook parse-hook)
+             (scope (car (javaimp--parse-scopes 1))))
+        (should-not (null scope))
+        (should (eq (javaimp-scope-type scope) (nth 1 data)))
+        (should (equal (javaimp-scope-name scope) (nth 2 data)))))))
+
+(ert-deftest javaimp-test--parse-scope-class ()
+  (javaimp-test--check-scope #'javaimp--parse-scope-class
+    '(("public class Foo<Bar, Baz> {"
+       class "Foo")
+      ("interface Foo<Bar, Baz> {"
+       interface "Foo")
+      ("private enum Foo {"
+       enum "Foo"))))
+
+(ert-deftest javaimp-test--parse-scope-anonymous-class ()
+  (javaimp-test--check-scope #'javaimp--parse-scope-anonymous-class
+    '((" = new Object<Class1, Class2>(1 + 1, baz) {"
+       anonymous-class "Anon_Object<Class1, Class2>")
+      (" = (obj.getField()).new Object<Class1, Class2>(1, baz) {"
+       anonymous-class "Anon_Object<Class1, Class2>")
+      (" = obj.new Object<>(1, baz) {"
+       anonymous-class "Anon_Object<>"))))
+
+(ert-deftest javaimp-test--parse-scope-method-or-stmt ()
+  (javaimp-test--check-scope #'javaimp--parse-scope-method-or-stmt
+    '(("static void foo_bar(String a, int b) {"
+       method "foo_bar(String a, int b)")
+      ("void foo_bar(String a, int b) throws E1, E2 {"
+       method "foo_bar(String a, int b) throws E1, E2")
+      ("if (foo_bar(a, b) < 2) {"
+       statement "if"))))
+
+(ert-deftest javaimp-test--parse-scope-simple-stmt ()
+  (javaimp-test--check-scope #'javaimp--parse-scope-simple-stmt
+    '(("try {"
+       simple-statement "try")
+      ;; static initializer also falls in this category
+      ("static {"
+       simple-statement "static"))))
+
+
 (ert-deftest javaimp-test--parse-arglist ()
   (dolist (data '(("")
                   ("  ")
@@ -69,6 +119,7 @@ Exception4<? super Exception5>>")
       (should (equal (javaimp--parse-arglist (point-min) (point-max) t)
                      (cdr data))))))
 
+
 (ert-deftest javaimp-test--parse-get-package ()
   (with-temp-buffer
     (insert "//package org.commented1;
@@ -76,8 +127,9 @@ Exception4<? super Exception5>>")
   package org.foo;")
     (should (equal (javaimp--parse-get-package) "org.foo"))))
 
-(ert-deftest javaimp-test--parse-get-file-classes ()
-  (should (equal (javaimp--parse-get-file-classes
+
+(ert-deftest javaimp-test--get-file-classes ()
+  (should (equal (javaimp--get-file-classes
                   (concat javaimp--basedir "testdata/test-get-file-classes-1.java"))
                  '("org.foo.Top"
                    "org.foo.Top.CInner1"
@@ -87,3 +139,5 @@ Exception4<? super Exception5>>")
                    "org.foo.Top.IInner1.IInner1_CInner1"
                    "org.foo.Top.EInner1"
                    "org.foo.Top.EInner1.EInner1_EInner1"))))
+
+(provide 'javaimp-tests)

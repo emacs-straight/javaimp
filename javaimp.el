@@ -412,7 +412,10 @@ prefix arg is given, don't do this filtering."
                javaimp-additional-source-dirs)))
 
 (defun javaimp--dir-above-current-package ()
-  (let ((package (javaimp--parse-get-package)))
+  (let ((package (save-excursion
+                   (save-restriction
+                     (widen)
+                     (javaimp--parse-get-package)))))
     (when package
       (string-remove-suffix
        (mapconcat #'file-name-as-directory
@@ -421,10 +424,19 @@ prefix arg is given, don't do this filtering."
 
 (defun javaimp--get-directory-classes (dir)
   (if (file-accessible-directory-p dir)
-      (seq-mapcat #'javaimp--parse-get-file-classes
+      (seq-mapcat #'javaimp--get-file-classes
                   (seq-filter (lambda (file)
                                 (not (file-symlink-p file)))
                               (directory-files-recursively dir "\\.java\\'")))))
+
+(defun javaimp--get-file-classes (file)
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((package (javaimp--parse-get-package)))
+      (mapcar (lambda (class)
+                (if package
+                    (concat package "." class)))
+              (javaimp--parse-get-file-classes)))))
 
 
 ;; Organizing imports
@@ -543,6 +555,9 @@ is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
 	(setq last-order order)))))
 
 
+
+;; Misc
+
 (defun javaimp-reset (arg)
   "Forget loaded trees state.  With prefix arg, also reset jars
 cache."
@@ -551,6 +566,19 @@ cache."
         javaimp--jdk-classes 'need-init)
   (when arg
     (setq javaimp-cached-jars nil)))
+
+(defun javaimp-show-scopes-at-point ()
+  "Shows current scopes in a *javaimp-parse* buffer.  Useful for
+debugging."
+  (interactive)
+  (with-output-to-temp-buffer "*javaimp-parse*"
+    (let ((parse-sexp-ignore-comments t) ; FIXME remove with major mode
+          (parse-sexp-lookup-properties nil))
+      (prin1 (javaimp--parse-scopes nil)))
+    (with-current-buffer standard-output
+      (fundamental-mode)
+      (goto-char (point-min))
+      (indent-pp-sexp t))))
 
 (provide 'javaimp)
 
