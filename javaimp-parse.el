@@ -60,7 +60,7 @@ present."
   (member (symbol-name (javaimp-scope-type scope)) javaimp--parse-class-keywords))
 
 (defvar javaimp--arglist-syntax-table
-  (let ((st (make-syntax-table java-mode-syntax-table)))
+  (let ((st (make-syntax-table java-mode-syntax-table))) ;TODO don't depend
     (modify-syntax-entry ?< "(>" st)
     (modify-syntax-entry ?> ")<" st)
     (modify-syntax-entry ?. "_" st) ; separates parts of fully-qualified type
@@ -179,13 +179,13 @@ present."
     javaimp--parse-scope-unknown        ; catch-all
     ))
 
+
 (defun javaimp--parse-scope-class (state)
   (save-excursion
-    (if (and (re-search-backward javaimp--parse-class-re nil t)
-             ;; if there's no paren in between - assume we're looking at
-             ;; class declaration
-             (not (save-match-data
-                    (search-forward "(" (nth 1 state) t))))
+    (if (and (javaimp--rsb-outside-context javaimp--parse-class-re nil t)
+             ;; Does found declaration belong to the right block?
+             (= (scan-lists (match-end 0) 1 -1)
+                (1+ (nth 1 state))))
         (make-javaimp-scope :type (intern (match-string 1))
                             :name (match-string 2)
                             :start (match-beginning 1)
@@ -202,13 +202,16 @@ present."
                   (scan-lists (point) -1 0))))
       (skip-syntax-backward "-")
       (let ((end (point)))
-        (when (and (re-search-backward "\\<new\\s-+" nil t)
-                   (not (save-match-data
-                          (search-forward "(" end t))))
+        (when (and (javaimp--rsb-outside-context "\\<new\\>" nil t)
+                   ;; Does found "new" belong to the right block?
+                   (= (scan-lists (match-end 0) 1 -1)
+                      (1+ (nth 1 state))))
+          (goto-char (match-end 0))
+          (skip-syntax-forward "-")
           (make-javaimp-scope :type 'anonymous-class
                               :name (concat "Anon_"
                                             (buffer-substring-no-properties
-                                             (match-end 0) end))
+                                             (point) end))
                               :start (match-beginning 0)
                               :open-brace (nth 1 state)))))))
 
@@ -256,13 +259,16 @@ element component will be present).  Point is left at the
 position from where method signature parsing may be continued.
 Returns t if parsing failed and should not be continued."
   (let ((pos (point)))
-    (when (re-search-backward "\\<throws\\s-+" nil t)
+    (when (javaimp--rsb-outside-context "\\<throws\\>" nil t)
       (if (ignore-errors
-            ;; Does our found throws belong to the right block?
+            ;; Does found "throws" belong to the right block?
             (= (scan-lists (match-end 0) 1 -1)
                (1+ (nth 1 state))))
           (let ((res (save-match-data
-                       (javaimp--parse-arglist (match-end 0)
+                       (javaimp--parse-arglist (save-excursion
+                                                 (goto-char (match-end 0))
+                                                 (skip-syntax-forward "-")
+                                                 (point))
                                                (save-excursion
                                                  (goto-char pos)
                                                  (skip-syntax-backward "-")
@@ -319,33 +325,36 @@ Returns t if parsing failed and should not be continued."
 ;; Main
 
 (defun javaimp--parse-get-package ()
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (catch 'found
-        (while (re-search-forward "^\\s *package\\s +\\([^;]+\\)\\s *;" nil t)
-          (let ((state (syntax-ppss)))
-            (unless (syntax-ppss-context state)
-              (throw 'found (match-string 1)))))))))
+  (let ((parse-sexp-ignore-comments t)  ;TODO set in mode
+        (parse-sexp-lookup-properties nil))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-max))
+        (when (javaimp--rsb-outside-context
+               "^\\s *package\\s +\\([^;]+\\)\\s *;" nil t 1)
+          (match-string 1))))))
 
 (defun javaimp--parse-get-file-classes (file)
   (with-temp-buffer
     (insert-file-contents file)
-    (let ((parse-sexp-ignore-comments t)
-          (package (javaimp--parse-get-package))
+    (goto-char (point-max))
+    (let ((package (javaimp--parse-get-package))
+          (parse-sexp-ignore-comments t) ;TODO set in mode
+          (parse-sexp-lookup-properties nil)
           res)
-      (while (re-search-forward javaimp--parse-class-re nil t)
-        (when (and (ignore-errors
-                     (goto-char (scan-lists (point) 1 -1)))
-                   (= (char-before) ?{))
-          (let ((scopes (javaimp--parse-scopes nil))
-                curr)
-            (when (seq-every-p #'javaimp--parse-is-class scopes)
-              (setq curr (mapconcat #'javaimp-scope-name scopes "."))
-              (if package
-                  (setq curr (concat package "." curr)))
-              (push curr res)))))
-      (nreverse res))))
+      (while (javaimp--rsb-outside-context javaimp--parse-class-re nil t)
+        (save-excursion
+          (when (and (ignore-errors
+                       (goto-char (scan-lists (point) 1 -1)))
+                     (= (char-before) ?{))
+            (let ((scopes (javaimp--parse-scopes nil))
+                  curr)
+              (when (seq-every-p #'javaimp--parse-is-class scopes)
+                (setq curr (mapconcat #'javaimp-scope-name scopes "."))
+                (if package
+                    (setq curr (concat package "." curr)))
+                (push curr res))))))
+      res)))
 
 (provide 'javaimp-parse)
