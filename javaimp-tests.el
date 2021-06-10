@@ -23,54 +23,76 @@
 ;;       (should (eql (length projects) 2)))))
 
 
-(defun javaimp-test--check-scope (parse-hook test-data)
+(defun javaimp-test--check-scope (parse-hook &rest test-items)
   (declare (indent 1))
-  (dolist (data test-data)
+  (dolist (item test-items)
     (with-temp-buffer
-      (insert (nth 0 data))
+      (insert (nth 0 item))
       (java-mode)
       (let* ((parse-sexp-ignore-comments t) ;FIXME remove with major mode
              (parse-sexp-lookup-properties nil)
              (javaimp--parse-scope-hook parse-hook)
              (scope (car (javaimp--parse-scopes 1))))
         (should-not (null scope))
-        (should (eq (javaimp-scope-type scope) (nth 1 data)))
-        (should (equal (javaimp-scope-name scope) (nth 2 data)))))))
+        (should (eq (javaimp-scope-type scope) (nth 1 item)))
+        (should (equal (javaimp-scope-name scope) (nth 2 item)))))))
 
 (ert-deftest javaimp-test--parse-scope-class ()
   (javaimp-test--check-scope #'javaimp--parse-scope-class
-    '(("public class Foo<Bar, Baz> {"
-       class "Foo")
-      ("interface Foo<Bar, Baz> {"
-       interface "Foo")
-      ("private enum Foo {"
-       enum "Foo"))))
+    '("class Foo {"
+      class "Foo")
+    '("class Foo extends Bar {"
+      class "Foo")
+    '("class Foo implements Bar {"
+      class "Foo")
+    '("class Foo implements Bar, Baz {"
+      class "Foo")
+    '("class Foo extends Bar implements Baz1, Baz2 {"
+      class "Foo")
+    '("public\nclass\nFoo\nextends\nBar\nimplements\nBaz1\n,\nBaz2\n{"
+      class "Foo")
+    '("class Foo<Bar, Baz> extends FooSuper<Bar, Baz> \
+implements Interface1<Bar, Baz>, Interface2 {"
+      class "Foo<Bar, Baz>")
+    '("interface Foo<Bar, Baz> {"
+      interface "Foo<Bar, Baz>")
+    '("private enum Foo {"
+      enum "Foo")))
 
 (ert-deftest javaimp-test--parse-scope-anonymous-class ()
   (javaimp-test--check-scope #'javaimp--parse-scope-anonymous-class
-    '((" = new Object<Class1, Class2>(1 + 1, baz) {"
-       anonymous-class "Anon_Object<Class1, Class2>")
-      (" = (obj.getField()).new Object<Class1, Class2>(1, baz) {"
-       anonymous-class "Anon_Object<Class1, Class2>")
-      (" = obj.new Object<>(1, baz) {"
-       anonymous-class "Anon_Object<>"))))
+    '(" = new Object<Class1, Class2>(1 + 1, baz) {"
+      anonymous-class "Object<Class1, Class2>")
+    '(" =\nnew\nObject\n<\nClass1\n,\nClass2\n>\n(\n1\n+\n1\n,\nbaz\n)\n{"
+      anonymous-class "Object < Class1 , Class2 >")
+    '(" = (obj.getField()).new Object<Class1, Class2>(1, baz) {"
+      anonymous-class "Object<Class1, Class2>")
+    '(" = obj.new Object<>(1, baz) {"
+      anonymous-class "Object<>")))
 
 (ert-deftest javaimp-test--parse-scope-method-or-stmt ()
   (javaimp-test--check-scope #'javaimp--parse-scope-method-or-stmt
-    '(("static void foo_bar(String a, int b) {"
-       method "foo_bar(String a, int b)")
-      ("void foo_bar(String a, int b) throws E1, E2 {"
-       method "foo_bar(String a, int b) throws E1, E2")
-      ("if (foo_bar(a, b) < 2) {"
-       statement "if"))))
+    '("static void foo_bar(String a, int b) {"
+      method "foo_bar(String a, int b)")
+    '("static void\nfoo_bar\n(\nString\na\n,\nint\nb\n)\n{"
+      method "foo_bar(String a, int b)")
+    '("void foo_bar(String a, int b) throws E1, E2 {"
+      method "foo_bar(String a, int b) throws E1, E2")
+    '("void foo_bar()
+throws E1 {"
+      method "foo_bar() throws E1")
+    '("if (foo_bar(a, b) < 2) {"
+      statement "if")))
 
 (ert-deftest javaimp-test--parse-scope-simple-stmt ()
   (javaimp-test--check-scope #'javaimp--parse-scope-simple-stmt
-    '(("try {"
-       simple-statement "try")
-      ;; static initializer also falls in this category
-      ("static {"
-       simple-statement "static"))))
+    '("try {"
+      simple-statement "try")
+    '("\ntry\n{"
+      simple-statement "try")
+    ;; static initializer also falls in this category
+    '("static {"
+      simple-statement "static")))
 
 
 (ert-deftest javaimp-test--parse-arglist ()
@@ -78,6 +100,9 @@
                   ("  ")
                   ("int i"
                    ("int" . "i"))
+                  ("\nint\ni\n,\nint\nj\n"
+                   ("int" . "i")
+                   ("int" . "j"))
                   (" List<? extends Comparable<? super T>> list, T... elements"
                    ("List<? extends Comparable<? super T>>" . "list")
                    ("T..." . "elements"))
@@ -104,6 +129,9 @@
                   ("  ")
                   ("Exception1"
                    ("Exception1"))
+                  ("\nEx1\n,\nEx2\n"
+                   ("Ex1")
+                   ("Ex2"))
                   (" Exception1 , org.foo_bar_3.Exception_2 "
                    ("Exception1")
                    ("org.foo_bar_3.Exception_2"))
@@ -132,8 +160,8 @@ Exception4<? super Exception5>>")
   (should (equal (javaimp--get-file-classes
                   (concat javaimp--basedir "testdata/test-get-file-classes-1.java"))
                  '("org.foo.Top"
-                   "org.foo.Top.CInner1"
-                   "org.foo.Top.CInner1.CInner1_CInner1"
+                   "org.foo.Top.CInner1<T, S>"
+                   "org.foo.Top.CInner1<T, S>.CInner1_CInner1"
                    "org.foo.Top.IInner1"
                    "org.foo.Top.IInner1.IInner1_IInner1"
                    "org.foo.Top.IInner1.IInner1_CInner1"
