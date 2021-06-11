@@ -33,7 +33,7 @@ present."
 
 (cl-defstruct javaimp-scope
   type ; one of anonymous-class, class, interface, enum, local-class,
-       ; method, statement, simple-statement, unknown
+       ; method, statement, simple-statement, array, unknown
   name
   start
   open-brace)
@@ -123,7 +123,8 @@ non-nil or t.  Otherwise the return value is nil.
 If STOP-P wants to look forward, it should be prepared to see
 whitespace / comments, this is because backward movement skips
 them before invoking STOP-P.  It should not move point.  If
-omitted, it defaults to `always'."
+omitted, it defaults to `always', in this case the effect of the
+function is to just skip whitespace / comments."
   (or stop-p (setq stop-p #'always))
   (catch 'done
     (let (last-what last-pos)
@@ -182,8 +183,9 @@ omitted, it defaults to `always'."
 ;;; Scopes
 
 (defvar javaimp--parse-scope-hook
-  '(;; should be before method/stmt because looks similar, but with
-    ;; "new" in front
+  '(javaimp--parse-scope-array
+    ;; anonymous-class should be before method/stmt because it looks
+    ;; similar, but with "new" in front
     javaimp--parse-scope-anonymous-class
     javaimp--parse-scope-class
     javaimp--parse-scope-simple-stmt
@@ -193,6 +195,12 @@ omitted, it defaults to `always'."
 
 
 (defun javaimp--parse-preceding (regexp scope-start &optional skip-count)
+  "Returns non-nil if a match for REGEXP is found before point.
+Matches inside comments / strings are skipped.  Potential match
+is checked to be SKIP-COUNT lists away from the SCOPE-START (1 is
+for scope start itself, so if you want to skip one additional
+list, use 2 etc.).  If a match is found, then match-data is set,
+as for `re-search-backward'."
   (and (javaimp--rsb-outside-context regexp nil t)
        (ignore-errors
          ;; Does our match belong to the right block?
@@ -229,13 +237,18 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
 (defun javaimp--parse-scope-simple-stmt (state)
   "Attempts to parse `simple-statement' scope."
   (save-excursion
-    (if (javaimp--parse-preceding (regexp-opt javaimp--parse-stmt-keywords 'words)
-                                  (nth 1 state))
-        (make-javaimp-scope
-         :type 'simple-statement
-         :name (match-string 1)
-         :start (point)
-         :open-brace (nth 1 state)))))
+    (and (javaimp--parse-skip-back-until)
+         (looking-back (concat
+                        (regexp-opt javaimp--parse-stmt-keywords 'words)
+                        "\\|->")
+                       nil t)
+         (make-javaimp-scope
+          :type 'simple-statement
+          :name (or (match-string 1)
+                    "lambda")
+          :start (or (match-beginning 1)
+                     (- (point) 2))
+          :open-brace (nth 1 state)))))
 
 (defun javaimp--parse-scope-anonymous-class (state)
   "Attempts to parse `anonymous-class' scope."
@@ -319,6 +332,16 @@ not be continued."
         ;; just return to where we started
         (goto-char pos)
         nil))))
+
+(defun javaimp--parse-scope-array (state)
+  "Attempts to parse 'array' scope."
+  (save-excursion
+    (and (javaimp--parse-skip-back-until)
+         (member (char-before) '(?, ?{ ?\]))
+         (make-javaimp-scope :type 'array
+                             :name ""
+                             :start nil
+                             :open-brace (nth 1 state)))))
 
 (defun javaimp--parse-scope-unknown (state)
   "Catch-all parser which produces `unknown' scope."
