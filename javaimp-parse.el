@@ -57,10 +57,10 @@ present."
   "Enables parsing angle brackets as lists")
 
 
-
-;;; Arglist
-
 (defun javaimp--parse-arglist (beg end &optional only-type)
+  "Parse arg list between BEG and END, of the form 'TYPE NAME,
+...'.  Return list of conses (TYPE . NAME).  If ONLY-TYPE is
+non-nil, then name parsing is skipped."
   (save-excursion
     (save-restriction
       (narrow-to-region beg end)
@@ -153,6 +153,43 @@ function is to just skip whitespace / comments."
                  (setq last-what 'char
                        last-pos (point)))))))))
 
+(defun javaimp--parse-preceding (regexp scope-start &optional skip-count)
+  "Returns non-nil if a match for REGEXP is found before point.
+Matches inside comments / strings are skipped.  Potential match
+is checked to be SKIP-COUNT lists away from the SCOPE-START (1 is
+for scope start itself, so if you want to skip one additional
+list, use 2 etc.).  If a match is found, then match-data is set,
+as for `re-search-backward'."
+  (and (javaimp--rsb-outside-context regexp nil t)
+       (ignore-errors
+         ;; Does our match belong to the right block?
+         (= (scan-lists (match-end 0) (or skip-count 1) -1)
+            (1+ scope-start)))))
+
+(defun javaimp--parse-decl-suffix (regexp state &optional bound)
+  "Subroutine of scope parsers.  Attempts to parse declaration
+suffix backwards (but not farther than BOUND), returning ARGS in
+the same format as `javaimp--parse-arglist' (but here, only TYPE
+element component will be present).  Point is left at the
+position from where scope parsing may be continued.  Returns t if
+parsing failed and should not be continued."
+  (let ((pos (point)))
+    (when (javaimp--rsb-outside-context regexp bound t)
+      (if (ignore-errors             ;As in javaimp--parse-preceding
+            (= (scan-lists (match-end 0) 1 -1)
+               (1+ (nth 1 state))))
+          (let ((res (save-match-data
+                       (javaimp--parse-arglist (match-end 0) pos t))))
+            (if res
+                (goto-char (match-beginning 0))
+              ;; Something's wrong here: tell the caller to stop
+              ;; parsing
+              (setq res t))
+            res)
+        ;; just return to where we started
+        (goto-char pos)
+        nil))))
+
 
 
 ;;; Formatting
@@ -192,20 +229,6 @@ function is to just skip whitespace / comments."
     javaimp--parse-scope-method-or-stmt
     javaimp--parse-scope-unknown
     ))
-
-
-(defun javaimp--parse-preceding (regexp scope-start &optional skip-count)
-  "Returns non-nil if a match for REGEXP is found before point.
-Matches inside comments / strings are skipped.  Potential match
-is checked to be SKIP-COUNT lists away from the SCOPE-START (1 is
-for scope start itself, so if you want to skip one additional
-list, use 2 etc.).  If a match is found, then match-data is set,
-as for `re-search-backward'."
-  (and (javaimp--rsb-outside-context regexp nil t)
-       (ignore-errors
-         ;; Does our match belong to the right block?
-         (= (scan-lists (match-end 0) (or skip-count 1) -1)
-            (1+ scope-start)))))
 
 (defun javaimp--parse-scope-class (state)
   "Attempts to parse 'class' / 'interface' / 'enum' scope.  Some of
@@ -308,31 +331,6 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
              :start (point)
              :open-brace (nth 1 state))))))))
 
-(defun javaimp--parse-decl-suffix (regexp state &optional bound)
-  "Subroutine of other scope parsers.  Attempts to parse
-declaration suffix backwards (but not farther than BOUND),
-returning ARGS in the same format as
-`javaimp--parse-arglist' (but here, only TYPE element component
-will be present).  Point is left at the position from where scope
-parsing may be continued.  Returns t if parsing failed and should
-not be continued."
-  (let ((pos (point)))
-    (when (javaimp--rsb-outside-context regexp bound t)
-      (if (ignore-errors             ;As in javaimp--parse-preceding
-            (= (scan-lists (match-end 0) 1 -1)
-               (1+ (nth 1 state))))
-          (let ((res (save-match-data
-                       (javaimp--parse-arglist (match-end 0) pos t))))
-            (if res
-                (goto-char (match-beginning 0))
-              ;; Something's wrong here: tell the caller to stop
-              ;; parsing
-              (setq res t))
-            res)
-        ;; just return to where we started
-        (goto-char pos)
-        nil))))
-
 (defun javaimp--parse-scope-array (state)
   "Attempts to parse 'array' scope."
   (save-excursion
@@ -351,8 +349,9 @@ not be continued."
                       :open-brace (nth 1 state)))
 
 (defun javaimp--parse-scopes (count)
-  (let ((state (syntax-ppss))
-        res)
+  "Attempts to parse COUNT enclosing scopes at point.  If COUNT is
+nil then goes all the way up."
+  (let ((state (syntax-ppss)) res)
     (unless (syntax-ppss-context state)
       (save-excursion
         (while (and (nth 1 state)
