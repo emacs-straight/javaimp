@@ -100,20 +100,17 @@ class name.  Lowest-order groups are placed earlier.
 
 The order of classes which were not matched is defined by
 `javaimp-import-default-order'."
-  :group 'javaimp
   :type '(alist :key-type string :value-type integer))
 
 (defcustom javaimp-import-default-order 50
   "Defines the order of classes which were not matched by
 `javaimp-import-group-alist'"
-  :group 'javaimp
   :type 'integer)
 
 (defcustom javaimp-java-home (getenv "JAVA_HOME")
   "Path to the JDK.  Should contain subdirectory
 \"jre/lib\" (pre-JDK9) or just \"lib\".  By default, it is
 initialized from the JAVA_HOME environment variable."
-  :group 'javaimp
   :type 'string)
 
 (defcustom javaimp-additional-source-dirs nil
@@ -132,19 +129,16 @@ of the leading slash.
 
 Custom values set in plugin configuration in pom.xml are not
 supported yet."
-  :group 'javaimp
   :type '(repeat (string :tag "Relative directory")))
 
 (defcustom javaimp-jar-program "jar"
   "Path to the `jar' program used to read contents of jar files.
 Customize it if the program is not on `exec-path'."
-  :group 'javaimp
   :type 'string)
 
 (defcustom javaimp-jmod-program "jmod"
   "Path to the `jmod' program used to read contents of jmod files.
 Customize it if the program is not on `exec-path'."
-  :group 'javaimp
   :type 'string)
 
 (defcustom javaimp-include-current-module-classes t
@@ -152,7 +146,6 @@ Customize it if the program is not on `exec-path'."
 completion alternatives.  `javaimp-add-import' will find all java
 files in the current project and add their fully-qualified names
 to the completion alternatives list."
-  :group 'javaimp
   :type 'boolean)
 
 
@@ -567,18 +560,71 @@ cache."
   (when arg
     (setq javaimp-cached-jars nil)))
 
-(defun javaimp-show-scopes-at-point ()
-  "Shows current scopes in a *javaimp-parse* buffer.  Useful for
-debugging."
+
+
+;; Help
+
+(defvar javaimp-help-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map "\C-m" #'javaimp-help-goto-scope)
+    (define-key map [mouse-2] #'javaimp-help-goto-scope-mouse)
+    map)
+  "Keymap for Javaimp help buffers.")
+
+(defun javaimp-help-goto-scope (pos)
+  "Go to scope at point in another window."
+  (interactive "d")
+  (javaimp-help--goto-scope-1 pos))
+
+;; TODO handle mouse-1
+(defun javaimp-help-goto-scope-mouse (event)
+  "Go to scope you click on in another window."
+  (interactive "e")
+  (let ((window (posn-window (event-end event)))
+        (pos (posn-point (event-end event))))
+    (with-current-buffer (window-buffer window)
+      (javaimp-help--goto-scope-1 pos))))
+
+(defun javaimp-help--goto-scope-1 (pos)
+  "Go to the opening brace (`javaimp-scope-open-brace') of the
+scope at POS.  With prefix arg, go to scope
+start (`javaimp-scope-start') instead."
+  (let ((scope (get-text-property pos 'javaimp-help-scope))
+        (file (get-text-property (point-min) 'javaimp-help-file)))
+    (when (and scope file)
+      (with-current-buffer (find-file-other-window file)
+        (goto-char (if current-prefix-arg
+                       (javaimp-scope-start scope)
+                     (javaimp-scope-open-brace scope)))))))
+
+(defun javaimp-help-scopes-at-point ()
+  "Shows enclosing scopes at point in a *javaimp-scopes* buffer,
+which is first cleared."
   (interactive)
-  (with-output-to-temp-buffer "*javaimp-parse*"
-    (let ((parse-sexp-ignore-comments t) ; FIXME remove with major mode
-          (parse-sexp-lookup-properties nil))
-      (prin1 (javaimp--parse-scopes nil)))
-    (with-current-buffer standard-output
-      (fundamental-mode)
-      (goto-char (point-min))
-      (indent-pp-sexp t))))
+  (let* ((parse-sexp-ignore-comments t) ; FIXME remove with major mode
+         (parse-sexp-lookup-properties nil)
+         (scopes (javaimp--parse-scopes nil))
+         (file buffer-file-name)
+         (pos (point))
+         (buf (get-buffer-create "*javaimp-scopes*")))
+    (with-current-buffer buf
+      (setq buffer-read-only nil)
+      (erase-buffer)
+      (insert (propertize (format "Scopes at position %d in file:\n  %s\n\n"
+                                  pos file)
+                          'javaimp-help-file file))
+      (dolist (scope scopes)
+        (insert (propertize
+                 (concat (symbol-name (javaimp-scope-type scope))
+                         " "
+                         (javaimp-scope-name scope)
+                         "\n")
+                 'mouse-face 'highlight
+                 'help-echo "mouse-2: go to this scope"
+                 'javaimp-help-scope scope
+                 'keymap javaimp-help-keymap)))
+      (setq buffer-read-only t))
+    (display-buffer buf)))
 
 (provide 'javaimp)
 

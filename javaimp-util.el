@@ -145,9 +145,10 @@ point is outside of any context initially."
   (or count (setq count 1))
   (let ((step (if (>= count 0) 1 -1))
         res)
-    (dotimes (iter (abs count) res)
+    (dotimes (_ (abs count))
       (while (and (setq res (re-search-backward regexp bound noerror step))
-                  (syntax-ppss-context (syntax-ppss)))))))
+                  (syntax-ppss-context (syntax-ppss)))))
+    res))
 
 
 

@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'cc-mode)                      ;for java-mode-syntax-table
+(require 'javaimp-util)
 
 (defcustom javaimp-parse-format-method-name
   #'javaimp--parse-format-method-name-full
@@ -73,9 +74,10 @@ non-nil, then name parsing is skipped."
                      (not (bobp)))
               (push (javaimp--parse-arglist-one-arg only-type) res)
               ;; move back to the previous argument, if any
-              (when (javaimp--parse-skip-back-until (lambda (last-what last-pos)
-                                                      (and (not (bobp))
-                                                           (= (char-before) ?,))))
+              (when (javaimp--parse-skip-back-until
+                     (lambda (_last-what _last-pos)
+                       (and (not (bobp))
+                            (= (char-before) ?,))))
                 (backward-char)))       ; skip comma
             res))))))
 
@@ -98,10 +100,11 @@ skipping further backwards is done by the caller."
     ;; Parse type: allow anything, but stop at the word boundary which
     ;; is not inside list (this is presumably the type start..)
     (if-let ((last-skip
-              (javaimp--parse-skip-back-until (lambda (last-what last-pos)
-                                                (save-excursion
-                                                  (if last-pos (goto-char last-pos))
-                                                  (looking-at "\\_<"))))))
+              (javaimp--parse-skip-back-until
+               (lambda (_last-what last-pos)
+                 (save-excursion
+                   (if last-pos (goto-char last-pos))
+                   (looking-at "\\_<"))))))
         (progn
           (unless (eq last-skip t)
             (goto-char (cdr last-skip))) ;undo skipping by ..-until
@@ -208,7 +211,7 @@ parsing failed and should not be continued."
                       (mapconcat #'car throws-args ", ")))
           ))
 
-(defsubst javaimp--parse-format-method-name-types (name args throws-args)
+(defsubst javaimp--parse-format-method-name-types (name args _throws-args)
   "Outputs NAME and ARGS (only type)."
   (concat name
           "("
