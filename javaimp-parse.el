@@ -64,22 +64,25 @@ present."
 non-nil, then name parsing is skipped."
   (save-excursion
     (save-restriction
+      (syntax-ppss-flush-cache beg)
       (narrow-to-region beg end)
-      (with-syntax-table javaimp--arglist-syntax-table ;skip generics like lists
-        (goto-char (point-max))
-        (ignore-errors
-          (let (res)
-            (while (progn
-                     (javaimp--parse-skip-back-until)
-                     (not (bobp)))
-              (push (javaimp--parse-arglist-one-arg only-type) res)
-              ;; move back to the previous argument, if any
-              (when (javaimp--parse-skip-back-until
-                     (lambda (_last-what _last-pos)
-                       (and (not (bobp))
-                            (= (char-before) ?,))))
-                (backward-char)))       ; skip comma
-            res))))))
+      (prog1
+          (with-syntax-table javaimp--arglist-syntax-table
+            (goto-char (point-max))
+            (ignore-errors
+              (let (res)
+                (while (progn
+                         (javaimp--parse-skip-back-until)
+                         (not (bobp)))
+                  (push (javaimp--parse-arglist-one-arg only-type) res)
+                  ;; move back to the previous argument, if any
+                  (when (javaimp--parse-skip-back-until
+                         (lambda (_last-what _last-pos)
+                           (and (not (bobp))
+                                (= (char-before) ?,))))
+                    (backward-char)))   ; skip comma
+                res)))
+        (syntax-ppss-flush-cache beg)))))
 
 (defun javaimp--parse-arglist-one-arg (only-type)
   "Parse one argument as type and name backwards starting from
