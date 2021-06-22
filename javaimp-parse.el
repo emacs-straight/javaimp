@@ -249,6 +249,8 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
                               (or (javaimp--parse-decl-suffix "\\<extends\\>"
                                                               state keyword-end)
                                   (javaimp--parse-decl-suffix "\\<implements\\>"
+                                                              state keyword-end)
+                                  (javaimp--parse-decl-suffix "\\<permits\\>"
                                                               state keyword-end))))
                arglist)
           (unless (eq decl-suffix t)
