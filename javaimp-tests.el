@@ -47,34 +47,40 @@
       class "Foo")
     '("class Foo implements Bar, Baz {"
       class "Foo")
-    '("class Foo extends Bar implements Baz1, Baz2 {"
+    '("public class Foo extends Bar implements Baz1 , Baz2 {"
       class "Foo")
-    '("public\nclass\nFoo\nextends\nBar\nimplements\nBaz1\n,\nBaz2\n{"
+    `(,(subst-char-in-string
+        ?  ?\n
+        "public class Foo extends Bar implements Baz1 , Baz2 {")
       class "Foo")
     '("class Foo<Bar, Baz> extends FooSuper<Bar, Baz> \
 implements Interface1<Bar, Baz>, Interface2 {"
-      class "Foo<Bar, Baz>")
+      class "Foo")
     '("interface Foo<Bar, Baz> {"
-      interface "Foo<Bar, Baz>")
+      interface "Foo")
     '("private enum Foo {"
       enum "Foo")))
 
 (ert-deftest javaimp-test--parse-scope-anonymous-class ()
   (javaimp-test--check-scope #'javaimp--parse-scope-anonymous-class
-    '(" = new Object<Class1, Class2>(1 + 1, baz) {"
-      anonymous-class "Object<Class1, Class2>")
-    '(" =\nnew\nObject\n<\nClass1\n,\nClass2\n>\n(\n1\n+\n1\n,\nbaz\n)\n{"
-      anonymous-class "Object < Class1 , Class2 >")
+    '(" = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {"
+      anonymous-class "Object")
+    `(,(subst-char-in-string
+        ?  ?\n
+        " = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {")
+      anonymous-class "Object")
     '(" = (obj.getField()).new Object<Class1, Class2>(1, baz) {"
-      anonymous-class "Object<Class1, Class2>")
+      anonymous-class "Object")
     '(" = obj.new Object<>(1, baz) {"
-      anonymous-class "Object<>")))
+      anonymous-class "Object")))
 
 (ert-deftest javaimp-test--parse-scope-method-or-stmt ()
   (javaimp-test--check-scope #'javaimp--parse-scope-method-or-stmt
-    '("static void foo_bar(String a, int b) {"
+    '("static void foo_bar ( String a , int b ) {"
       method "foo_bar(String a, int b)")
-    '("static void\nfoo_bar\n(\nString\na\n,\nint\nb\n)\n{"
+    `(,(subst-char-in-string
+        ?  ?\n
+        "static void foo_bar ( String a , int b ) {")
       method "foo_bar(String a, int b)")
     '("void foo_bar(String a, int b) throws E1, E2 {"
       method "foo_bar(String a, int b) throws E1, E2")
@@ -86,9 +92,9 @@ throws E1 {"
 
 (ert-deftest javaimp-test--parse-scope-simple-stmt ()
   (javaimp-test--check-scope #'javaimp--parse-scope-simple-stmt
-    '("try {"
+    '(" try {"
       simple-statement "try")
-    '("\ntry\n{"
+    `(,(subst-char-in-string ?  ?\n " try {")
       simple-statement "try")
     ;; static initializer
     '("static {"
@@ -174,8 +180,8 @@ Exception4<? super Exception5>>")
   (should (equal (javaimp--get-file-classes
                   (concat javaimp--basedir "testdata/test-get-file-classes-1.java"))
                  '("org.foo.Top"
-                   "org.foo.Top.CInner1<T, S>"
-                   "org.foo.Top.CInner1<T, S>.CInner1_CInner1"
+                   "org.foo.Top.CInner1"
+                   "org.foo.Top.CInner1.CInner1_CInner1"
                    "org.foo.Top.IInner1"
                    "org.foo.Top.IInner1.IInner1_IInner1"
                    "org.foo.Top.IInner1.IInner1_CInner1"

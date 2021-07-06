@@ -58,6 +58,12 @@ present."
   "Enables parsing angle brackets as lists")
 
 
+(defsubst javaimp--parse-substr-before-< (str)
+  (let ((end (string-search "<" str)))
+    (if end
+        (string-trim (substring str 0 end))
+      str)))
+
 (defun javaimp--parse-arglist (beg end &optional only-type)
   "Parse arg list between BEG and END, of the form 'TYPE NAME,
 ...'.  Return list of conses (TYPE . NAME).  If ONLY-TYPE is
@@ -261,7 +267,7 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
               (make-javaimp-scope :type (intern
                                          (buffer-substring-no-properties
                                           keyword-start keyword-end))
-                                  :name (caar arglist)
+                                  :name (javaimp--parse-substr-before-< (caar arglist))
                                   :start keyword-start
                                   :open-brace (nth 1 state))))))))
 
@@ -298,7 +304,7 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
                 arglist (javaimp--parse-arglist (match-end 0) end t))
           (when (= (length arglist) 1)
             (make-javaimp-scope :type 'anonymous-class
-                                :name (caar arglist)
+                                :name (javaimp--parse-substr-before-< (caar arglist))
                                 :start start
                                 :open-brace (nth 1 state))))))))
 
