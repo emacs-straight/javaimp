@@ -56,6 +56,13 @@
     '("class Foo<Bar, Baz> extends FooSuper<Bar, Baz> \
 implements Interface1<Bar, Baz>, Interface2 {"
       class "Foo")
+    '("class Foo<E extends Bar> {"
+      class "Foo")
+    '("class Foo<Enum<?>> {"
+      class "Foo")
+    '("class Foo<T extends Baz<? extends Baz2>> \
+extends Bar<? extends Baz<? extends Baz2>> {"
+      class "Foo")
     '("interface Foo<Bar, Baz> {"
       interface "Foo")
     '("private enum Foo {"

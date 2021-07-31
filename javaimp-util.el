@@ -137,20 +137,6 @@ buffer and returns its result"
                   (concat "[" path-separator "\n]+")
                   t)))
 
-
-(defun javaimp--rsb-outside-context (regexp &optional bound noerror count)
-  "Like `re-search-backward', but count only occurences outside
-syntactic context as given by `syntax-ppss-context'.  Assumes
-point is outside of any context initially."
-  (or count (setq count 1))
-  (let ((step (if (>= count 0) 1 -1))
-        res)
-    (dotimes (_ (abs count))
-      (while (and (setq res (re-search-backward regexp bound noerror step))
-                  (syntax-ppss-context (syntax-ppss)))))
-    res))
-
-
 
 ;; Tree building & search
 

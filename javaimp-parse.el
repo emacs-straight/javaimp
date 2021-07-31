@@ -57,6 +57,15 @@ present."
     st)
   "Enables parsing angle brackets as lists")
 
+(defmacro javaimp--parse-with-arglist-syntax (beg &rest body)
+  (declare (debug t))
+  (let ((begin (make-symbol "begin")))
+    `(let ((,begin ,beg))
+       (syntax-ppss-flush-cache ,begin)
+       (unwind-protect
+           (with-syntax-table javaimp--arglist-syntax-table
+             ,@body)
+         (syntax-ppss-flush-cache ,begin)))))
 
 (defsubst javaimp--parse-substr-before-< (str)
   (let ((end (string-search "<" str)))
@@ -64,31 +73,41 @@ present."
         (string-trim (substring str 0 end))
       str)))
 
+(defun javaimp--parse-rsb-keyword (regexp &optional bound noerror count)
+  "Like `re-search-backward', but count only occurences outside
+syntactic context as given by `syntax-ppss-context'.  Assumes
+point is outside of any context initially."
+  (or count (setq count 1))
+  (let ((step (if (>= count 0) 1 -1))
+        (case-fold-search nil)
+        res)
+    (dotimes (_ (abs count))
+      (while (and (setq res (re-search-backward regexp bound noerror step))
+                  (syntax-ppss-context (syntax-ppss)))))
+    res))
+
 (defun javaimp--parse-arglist (beg end &optional only-type)
   "Parse arg list between BEG and END, of the form 'TYPE NAME,
 ...'.  Return list of conses (TYPE . NAME).  If ONLY-TYPE is
 non-nil, then name parsing is skipped."
-  (save-excursion
-    (save-restriction
-      (syntax-ppss-flush-cache beg)
-      (narrow-to-region beg end)
-      (prog1
-          (with-syntax-table javaimp--arglist-syntax-table
-            (goto-char (point-max))
-            (ignore-errors
-              (let (res)
-                (while (progn
-                         (javaimp--parse-skip-back-until)
-                         (not (bobp)))
-                  (push (javaimp--parse-arglist-one-arg only-type) res)
-                  ;; move back to the previous argument, if any
-                  (when (javaimp--parse-skip-back-until
-                         (lambda (_last-what _last-pos)
-                           (and (not (bobp))
-                                (= (char-before) ?,))))
-                    (backward-char)))   ; skip comma
-                res)))
-        (syntax-ppss-flush-cache beg)))))
+  (javaimp--parse-with-arglist-syntax beg
+    (save-excursion
+      (save-restriction
+        (narrow-to-region beg end)
+        (goto-char (point-max))
+        (ignore-errors
+          (let (res)
+            (while (progn
+                     (javaimp--parse-skip-back-until)
+                     (not (bobp)))
+              (push (javaimp--parse-arglist-one-arg only-type) res)
+              ;; move back to the previous argument, if any
+              (when (javaimp--parse-skip-back-until
+                     (lambda (_last-what _last-pos)
+                       (and (not (bobp))
+                            (= (char-before) ?,))))
+                (backward-char)))       ; skip comma
+            res))))))
 
 (defun javaimp--parse-arglist-one-arg (only-type)
   "Parse one argument as type and name backwards starting from
@@ -172,35 +191,35 @@ is checked to be SKIP-COUNT lists away from the SCOPE-START (1 is
 for scope start itself, so if you want to skip one additional
 list, use 2 etc.).  If a match is found, then match-data is set,
 as for `re-search-backward'."
-  (and (javaimp--rsb-outside-context regexp nil t)
+  (and (javaimp--parse-rsb-keyword regexp nil t)
        (ignore-errors
          ;; Does our match belong to the right block?
          (= (scan-lists (match-end 0) (or skip-count 1) -1)
             (1+ scope-start)))))
 
 (defun javaimp--parse-decl-suffix (regexp state &optional bound)
-  "Subroutine of scope parsers.  Attempts to parse declaration
-suffix backwards (but not farther than BOUND), returning ARGS in
-the same format as `javaimp--parse-arglist' (but here, only TYPE
-element component will be present).  Point is left at the
-position from where scope parsing may be continued.  Returns t if
-parsing failed and should not be continued."
+  "Attempts to parse declaration suffix backwards from point (but
+not farther than BOUND), returning non-nil on success.  More
+precisely, the value is the end of the match for REGEXP.  Point
+is left before the match.  Otherwise, the result is nil and point
+is unchanged."
   (let ((pos (point)))
-    (when (javaimp--rsb-outside-context regexp bound t)
-      (if (ignore-errors             ;As in javaimp--parse-preceding
-            (= (scan-lists (match-end 0) 1 -1)
-               (1+ (nth 1 state))))
-          (let ((res (save-match-data
-                       (javaimp--parse-arglist (match-end 0) pos t))))
-            (if res
-                (goto-char (match-beginning 0))
-              ;; Something's wrong here: tell the caller to stop
-              ;; parsing
-              (setq res t))
-            res)
-        ;; just return to where we started
-        (goto-char pos)
-        nil))))
+    (catch 'found
+      (while (javaimp--parse-rsb-keyword regexp bound t)
+        (let ((scan-pos (match-end 0)))
+          (javaimp--parse-with-arglist-syntax scan-pos
+            (while (and scan-pos (<= scan-pos (nth 1 state)))
+              (if (ignore-errors
+                    (= (scan-lists scan-pos 1 -1) ;As in javaimp--parse-preceding
+                       (1+ (nth 1 state))))
+                  (progn
+                    (goto-char (match-beginning 0))
+                    (throw 'found (match-end 0)))
+                (setq scan-pos (ignore-errors
+                                 (scan-lists scan-pos 1 0))))))))
+      ;; just return to start
+      (goto-char pos)
+      nil)))
 
 
 
@@ -250,26 +269,21 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
                                   (nth 1 state))
         (let* ((keyword-start (match-beginning 1))
                (keyword-end (match-end 1))
-               (decl-suffix (progn
-                              (goto-char (nth 1 state))
-                              (or (javaimp--parse-decl-suffix "\\<extends\\>"
-                                                              state keyword-end)
-                                  (javaimp--parse-decl-suffix "\\<implements\\>"
-                                                              state keyword-end)
-                                  (javaimp--parse-decl-suffix "\\<permits\\>"
-                                                              state keyword-end))))
                arglist)
-          (unless (eq decl-suffix t)
-            ;; we either skipped back over the valid declaration
-            ;; suffix(-es), or there isn't any
-            (setq arglist (javaimp--parse-arglist keyword-end (point) t))
-            (when (= (length arglist) 1)
-              (make-javaimp-scope :type (intern
-                                         (buffer-substring-no-properties
-                                          keyword-start keyword-end))
-                                  :name (javaimp--parse-substr-before-< (caar arglist))
-                                  :start keyword-start
-                                  :open-brace (nth 1 state))))))))
+          (goto-char (nth 1 state))
+          (or (javaimp--parse-decl-suffix "\\<extends\\>" state keyword-end)
+              (javaimp--parse-decl-suffix "\\<implements\\>" state keyword-end)
+              (javaimp--parse-decl-suffix "\\<permits\\>" state keyword-end))
+          ;; we either skipped back over the valid declaration
+          ;; suffix(-es), or there wasn't any
+          (setq arglist (javaimp--parse-arglist keyword-end (point) t))
+          (when (= (length arglist) 1)
+            (make-javaimp-scope :type (intern
+                                       (buffer-substring-no-properties
+                                        keyword-start keyword-end))
+                                :name (javaimp--parse-substr-before-< (caar arglist))
+                                :start keyword-start
+                                :open-brace (nth 1 state)))))))
 
 (defun javaimp--parse-scope-simple-stmt (state)
   "Attempts to parse `simple-statement' scope."
@@ -311,7 +325,11 @@ those may later become 'local-class' (see `javaimp--parse-scopes')."
 (defun javaimp--parse-scope-method-or-stmt (state)
   "Attempts to parse `method' or `statement' scope."
   (save-excursion
-    (let ((throws-args (javaimp--parse-decl-suffix "\\<throws\\>" state)))
+    (let ((throws-args
+           (let ((pos (javaimp--parse-decl-suffix "\\<throws\\>" state)))
+             (when pos
+               (or (javaimp--parse-arglist pos (nth 1 state) t)
+                   t)))))
       (when (and (not (eq throws-args t))
                  (progn
                    (javaimp--parse-skip-back-until)
@@ -398,14 +416,14 @@ nil then goes all the way up."
 
 (defun javaimp--parse-get-package ()
   (goto-char (point-max))
-  (when (javaimp--rsb-outside-context
+  (when (javaimp--parse-rsb-keyword
          "^\\s-*package\\s-+\\([^;\n]+\\)\\s-*;" nil t 1)
     (match-string 1)))
 
 (defun javaimp--parse-get-file-classes ()
   (goto-char (point-max))
   (let (res)
-    (while (javaimp--rsb-outside-context
+    (while (javaimp--parse-rsb-keyword
             (regexp-opt javaimp--parse-class-keywords 'words) nil t)
       (save-excursion
         (let ((parse-sexp-ignore-comments t) ; FIXME remove with major mode
