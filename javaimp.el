@@ -78,6 +78,7 @@
 (require 'javaimp-maven)
 (require 'javaimp-gradle)
 (require 'javaimp-parse)
+(require 'cc-mode)                      ;for java-mode-syntax-table
 
 
 
@@ -148,6 +149,42 @@ files in the current project and add their fully-qualified names
 to the completion alternatives list."
   :type 'boolean)
 
+(defcustom javaimp-imenu-group-methods t
+  "How to lay out methods in Imenu index.
+If t (the default), methods are grouped in their enclosing
+scopes.  nil means use just flat list of simple method names.
+`qualified' means use flat list where each method name is
+prepended with nested scopes.  See also
+`javaimp-format-method-name'."
+  :type '(choice :tag "Group methods"
+		 (const :tag "Group into enclosing scopes" t)
+		 (const :tag "Flat list of simple name" nil)
+		 (const :tag "Flat list of qualified names" qualified)))
+
+(defcustom javaimp-cygpath-program
+  (if (eq system-type 'cygwin) "cygpath")
+  "Path to the `cygpath' program (Cygwin only).  Customize it if
+the program is not on `exec-path'."
+  :type 'string)
+
+(defcustom javaimp-format-method-name #'javaimp-format-method-name-full
+  "Function to format method name, invoked with 3 arguments:
+NAME, ARGS and THROWS-ARGS.  The last two are lists with elements
+of the form (TYPE . NAME).  For THROWS-ARGS, only TYPE is
+present."
+  :type 'function)
+
+(defcustom javaimp-mvn-program "mvn"
+  "Path to the `mvn' program.  Customize it if the program is not
+on `exec-path'."
+  :type 'string)
+
+(defcustom javaimp-gradle-program "gradle"
+  "Path to the `gradle' program.  Customize it if the program is
+not on `exec-path'.  If the visited project's directory contains
+gradlew program, it is used in preference."
+  :type 'string)
+
 
 ;; Variables
 
@@ -160,6 +197,17 @@ to the completion alternatives list."
 
 (defvar javaimp--jdk-classes 'need-init)
 
+(defvar javaimp-syntax-table
+  (make-syntax-table java-mode-syntax-table) ;TODO don't depend
+  "Javaimp syntax table")
+
+(defvar javaimp--arglist-syntax-table
+  (let ((st (make-syntax-table javaimp-syntax-table)))
+    (modify-syntax-entry ?< "(>" st)
+    (modify-syntax-entry ?> ")<" st)
+    (modify-syntax-entry ?. "_" st) ; separates parts of fully-qualified type
+    st)
+  "Enables parsing angle brackets as lists")
 
 
 ;;;###autoload
@@ -291,13 +339,17 @@ any module file."
 ;; do not expose tree structure, return only modules
 
 (defun javaimp-find-module (predicate)
-  (let ((node (javaimp--find-node predicate javaimp-project-forest)))
-    (and node
-	 (javaimp-node-contents node))))
+  "Returns first module in `javaimp-project-forest' for which
+PREDICATE returns non-nil."
+  (javaimp--find-node predicate javaimp-project-forest t))
 
 (defun javaimp-collect-modules (predicate)
-  (mapcar #'javaimp-node-contents
-	  (javaimp--collect-nodes predicate javaimp-project-forest)))
+  "Returns all modules in `javaimp-project-forest' for which
+PREDICATE returns non-nil."
+  (javaimp--collect-nodes predicate javaimp-project-forest))
+
+(defun javaimp-map-modules (function)
+  (javaimp--map-nodes function #'always javaimp-project-forest))
 
 
 ;;; Adding imports
@@ -425,11 +477,12 @@ prefix arg is given, don't do this filtering."
 (defun javaimp--get-file-classes (file)
   (with-temp-buffer
     (insert-file-contents file)
+    (setq javaimp--parse-dirty-pos (point-min))
     (let ((package (javaimp--parse-get-package)))
       (mapcar (lambda (class)
                 (if package
                     (concat package "." class)))
-              (javaimp--parse-get-file-classes)))))
+              (javaimp--parse-get-all-classlikes)))))
 
 
 ;; Organizing imports
@@ -549,17 +602,73 @@ is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
 
 
 
-;; Misc
+;; Imenu support
 
-(defun javaimp-reset (arg)
-  "Forget loaded trees state.  With prefix arg, also reset jars
-cache."
-  (interactive "P")
-  (setq javaimp-project-forest nil
-        javaimp--jdk-classes 'need-init)
-  (when arg
-    (setq javaimp-cached-jars nil)))
+;;;###autoload
+(defun javaimp-imenu-create-index ()
+  "Function to use as `imenu-create-index-function'."
+  (let ((forest (save-excursion
+                  (javaimp--parse-get-imenu-forest))))
+    (cond ((not javaimp-imenu-group-methods)
+           ;; plain list of methods
+           (let ((entries
+                  (mapcar #'javaimp-imenu--make-entry
+                          (seq-sort-by
+                           #'javaimp-scope-start #'<
+                           (javaimp--collect-nodes
+                            #'javaimp--is-imenu-included-method forest))))
+                 name-alist)
+             (mapc (lambda (entry)
+                     (setf (alist-get (car entry) name-alist 0 nil #'equal)
+                           (1+ (alist-get (car entry) name-alist 0 nil #'equal))))
+                   entries)
+             (mapc (lambda (entry)
+                     ;; disambiguate same method names
+                     (when (> (alist-get (car entry) name-alist 0 nil #'equal) 1)
+                       (setcar entry
+                               (format "%s [%s]"
+                                       (car entry)
+                                       (javaimp--concat-scope-parents
+                                        (nth 3 entry))))))
+                   entries)))
+          ((eq javaimp-imenu-group-methods 'qualified)
+           ;; list of qualified methods
+           (mapc (lambda (entry)
+                   ;; prepend parents to name
+                   (setcar entry (concat (javaimp--concat-scope-parents
+                                          (nth 3 entry))
+                                         "."
+                                         (car entry))))
+                 (mapcar #'javaimp-imenu--make-entry
+                         (seq-sort-by
+                          #'javaimp-scope-start #'<
+                          (javaimp--collect-nodes
+                           #'javaimp--is-imenu-included-method forest)))))
 
+          (t
+           ;; group methods inside their enclosing class
+           (javaimp--map-nodes
+            (lambda (scope)
+              (cond ((javaimp--is-classlike scope)
+                     ;; sub-alist
+                     (cons t (javaimp-scope-name scope)))
+                    ((javaimp--is-imenu-included-method scope)
+                     ;; entry
+                     (cons nil (javaimp-imenu--make-entry scope)))))
+            (lambda (res)
+              (or (functionp (nth 2 res)) ;entry
+                  (cdr res)))             ;non-empty sub-alist
+            forest)))))
+
+(defsubst javaimp-imenu--make-entry (scope)
+  (list (javaimp-scope-name scope)
+        (javaimp-scope-start scope)
+        #'javaimp-imenu--function
+        scope))
+
+(defun javaimp-imenu--function (_index-name index-position _scope)
+  (goto-char index-position)
+  (back-to-indentation))
 
 
 ;; Help
@@ -597,34 +706,48 @@ start (`javaimp-scope-start') instead."
                        (javaimp-scope-start scope)
                      (javaimp-scope-open-brace scope)))))))
 
-(defun javaimp-help-scopes-at-point ()
-  "Shows enclosing scopes at point in a *javaimp-scopes* buffer,
-which is first cleared."
+
+(defun javaimp-help-reparse-and-show-scopes ()
+  "Reparse scopes and show them in a *javaimp-scopes* buffer."
   (interactive)
-  (let* ((parse-sexp-ignore-comments t) ; FIXME remove with major mode
-         (parse-sexp-lookup-properties nil)
-         (scopes (javaimp--parse-scopes nil))
-         (file buffer-file-name)
-         (pos (point))
-         (buf (get-buffer-create "*javaimp-scopes*")))
+  (setq javaimp--parse-dirty-pos (point-min))
+  (let ((scopes (save-excursion
+                  (javaimp--parse-get-all-scopes)))
+        (file buffer-file-name)
+        (buf (get-buffer-create "*javaimp-scopes*")))
     (with-current-buffer buf
       (setq buffer-read-only nil)
       (erase-buffer)
-      (insert (propertize (format "Scopes at position %d in file:\n  %s\n\n"
-                                  pos file)
+      (insert (propertize (format "%s\n\n" file)
                           'javaimp-help-file file))
       (dolist (scope scopes)
-        (insert (propertize
-                 (concat (symbol-name (javaimp-scope-type scope))
-                         " "
-                         (javaimp-scope-name scope)
-                         "\n")
-                 'mouse-face 'highlight
-                 'help-echo "mouse-2: go to this scope"
-                 'javaimp-help-scope scope
-                 'keymap javaimp-help-keymap)))
+        (let ((depth 0)
+              (tmp scope))
+          (while (setq tmp (javaimp-scope-parent tmp))
+            (setq depth (1+ depth)))
+          (insert (propertize
+                   (format "%d: %010s %s\n"
+                           depth
+                           (symbol-name (javaimp-scope-type scope))
+                           (javaimp-scope-name scope))
+                   'mouse-face 'highlight
+                   'help-echo "mouse-2: go to this scope"
+                   'javaimp-help-scope scope
+                   'keymap javaimp-help-keymap))))
       (setq buffer-read-only t))
     (display-buffer buf)))
+
+
+;; Misc
+
+(defun javaimp-reset (arg)
+  "Forget loaded trees state.  With prefix arg, also reset jars
+cache."
+  (interactive "P")
+  (setq javaimp-project-forest nil
+        javaimp--jdk-classes 'need-init)
+  (when arg
+    (setq javaimp-cached-jars nil)))
 
 (provide 'javaimp)
 

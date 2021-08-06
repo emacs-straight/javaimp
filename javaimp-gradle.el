@@ -20,13 +20,6 @@
 
 (require 'javaimp-util)
 
-(defcustom javaimp-gradle-program "gradle"
-  "Path to the `gradle' program.  Customize it if the program is
-not on `exec-path'.  If the visited project's directory contains
-gradlew program, it is used in preference."
-  :group 'javaimp
-  :type 'string)
-
 (defconst javaimp--gradle-task-body
   (with-temp-buffer
     (insert-file-contents (expand-file-name "gradleTaskBody.inc.kts" javaimp--basedir))
@@ -48,7 +41,15 @@ information."
                             (javaimp--gradle-module-from-alist alist file))
                           alists)))
     ;; first module is always root
-    (javaimp--build-tree (car modules) nil modules)))
+    (message "Building tree for root: %s"
+             (javaimp-print-id (javaimp-module-id (car modules))))
+    (javaimp--build-tree (car modules) modules
+	                 ;; more or less reliable way to find children
+	                 ;; is to look for modules with "this" as the
+	                 ;; parent
+                         (lambda (el tested)
+                           (equal (javaimp-module-parent-id tested)
+                                  (javaimp-module-id el))))))
 
 (defun javaimp--gradle-handler ()
   (goto-char (point-min))

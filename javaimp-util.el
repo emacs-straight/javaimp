@@ -25,17 +25,25 @@
 (require 'cl-lib)
 (require 'seq)
 
-(defcustom javaimp-cygpath-program
-  (if (eq system-type 'cygwin) "cygpath")
-  "Path to the `cygpath' program (Cygwin only).  Customize it if
-the program is not on `exec-path'."
-  :group 'javaimp
-  :type 'string)
-
 (defconst javaimp-debug-buf-name "*javaimp-debug*")
 
 (defconst javaimp--basedir (file-name-directory load-file-name))
 
+(defconst javaimp--classlike-scope-types
+  '(class interface enum))
+
+(defconst javaimp--named-scope-types
+  (append
+   '(local-class method)
+   javaimp--classlike-scope-types))
+
+(defconst javaimp--all-scope-types
+  (append
+   '(anonymous-class statement simple-statement array unknown)
+   javaimp--named-scope-types))
+
+
+
 ;; Structs
 
 (cl-defstruct javaimp-node
@@ -59,6 +67,16 @@ the program is not on `exec-path'."
 (cl-defstruct javaimp-cached-jar        ;jar or jmod
   file read-ts classes)
 
+(cl-defstruct javaimp-scope
+  type                                  ; see javaimp--all-scope-types
+  name
+  start
+  open-brace
+  parent)
+
+
+
+;; Xml
 
 (defun javaimp--xml-children (xml-tree child-name)
   "Returns list of children of XML-TREE filtered by CHILD-NAME"
@@ -76,15 +94,181 @@ the program is not on `exec-path'."
   (car (cddr el)))
 
 
-(defun javaimp--get-file-ts (file)
-  (nth 5 (file-attributes file)))
+
+;; Scopes
 
-(defun javaimp-print-id (id)
+(defsubst javaimp--is-classlike (scope)
+  (and scope
+       (memq (javaimp-scope-type scope)
+             javaimp--classlike-scope-types)))
+
+(defsubst javaimp--is-named (scope)
+  (and scope
+       (memq (javaimp-scope-type scope)
+             javaimp--named-scope-types)))
+
+(defsubst javaimp--is-imenu-included-method (scope)
+  (and (eq (javaimp-scope-type scope) 'method)
+       (javaimp--is-classlike (javaimp-scope-parent scope))))
+
+(defun javaimp--copy-scope (scope)
+  "Recursively copies SCOPE and its parents."
+  (let* ((res (copy-javaimp-scope scope))
+         (tmp res)
+         orig-parent)
+    (while (setq orig-parent (javaimp-scope-parent tmp))
+      (setf (javaimp-scope-parent tmp) (copy-javaimp-scope orig-parent))
+      (setq tmp (javaimp-scope-parent tmp)))
+    res))
+
+(defun javaimp--filter-scope-parents (scope pred)
+  "Rewrite SCOPE's parents so that only those matching PRED are
+left."
+  (while scope
+    (let ((parent (javaimp-scope-parent scope)))
+      (if (and parent
+               (not (funcall pred parent)))
+          ;; leave out this parent
+          (setf (javaimp-scope-parent scope) (javaimp-scope-parent parent))
+        (setq scope (javaimp-scope-parent scope))))))
+
+(defun javaimp--concat-scope-parents (scope)
+  (let (parents)
+    (while (setq scope (javaimp-scope-parent scope))
+      (push scope parents))
+    (mapconcat #'javaimp-scope-name parents ".")))
+
+
+
+;;; Formatting
+
+(defsubst javaimp-format-method-name-full (name args throws-args)
+  "Outputs NAME, ARGS (name and type) and THROWS-ARGS (only type)."
+  (concat name
+          "("
+          (mapconcat (lambda (arg)
+                       (concat (car arg) " " (cdr arg)))
+                     args
+                     ", ")
+          ")"
+          (if throws-args
+              (concat " throws "
+                      (mapconcat #'car throws-args ", ")))
+          ))
+
+(defsubst javaimp-format-method-name-types (name args _throws-args)
+  "Outputs NAME and ARGS (only type)."
+  (concat name
+          "("
+          (mapconcat #'car args ", ")
+          ")"
+          ))
+
+
+
+;; Tree
+
+(defun javaimp--build-tree (this all child-p &optional parent-node sort-pred)
+  "Recursively builds tree for element THIS and its children.
+Children are those elements from ALL for which CHILD-P invoked
+with this element and tested element returns non-nil.  Children
+are sorted by SORT-PRED, if given.  PARENT-NODE is indented for
+recursive calls."
+  (let ((children (seq-filter (apply-partially child-p this)
+                              all)))
+    (if sort-pred
+        (setq children (sort children sort-pred)))
+    (let* ((this-node (make-javaimp-node
+		       :parent parent-node
+		       :children nil
+		       :contents this))
+	   (child-nodes
+	    (mapcar (lambda (child)
+		      (javaimp--build-tree
+                       child all child-p this-node sort-pred))
+		    children)))
+      (setf (javaimp-node-children this-node) child-nodes)
+      this-node)))
+
+(defun javaimp--find-node (pred forest &optional unwrap)
+  (catch 'found
+    (dolist (tree forest)
+      (javaimp--find-node-in-tree tree pred unwrap))))
+
+(defun javaimp--find-node-in-tree (tree pred unwrap)
+  (when tree
+    (if (funcall pred (javaimp-node-contents tree))
+	(throw 'found
+               (if unwrap
+                   (javaimp-node-contents tree)
+                 tree)))
+    (dolist (child (javaimp-node-children tree))
+      (javaimp--find-node-in-tree child pred unwrap))))
+
+
+(defun javaimp--collect-nodes (pred forest)
+  (apply #'seq-concatenate 'list
+	 (mapcar (lambda (tree)
+                   (delq nil
+		         (javaimp--collect-nodes-from-tree tree pred)))
+		 forest)))
+
+(defun javaimp--collect-nodes-from-tree (tree pred)
+  (when tree
+    (cons (and (funcall pred (javaimp-node-contents tree))
+               (javaimp-node-contents tree))
+	  (apply #'seq-concatenate 'list
+		 (mapcar (lambda (child)
+                           (delq nil
+			         (javaimp--collect-nodes-from-tree child pred)))
+			 (javaimp-node-children tree))))))
+
+
+(defun javaimp--map-nodes (function pred forest)
+  "Recursively applies FUNCTION to each node's contents in FOREST
+and returns new tree.  FUNCTION should return (t . VALUE) if the
+result for this node should be made a list of the form (VALUE
+. CHILDREN), or (nil . VALUE) for plain VALUE as the result (in
+this case children are discarded).  The result for each node is
+additionally tested by PRED."
+  (delq nil
+        (mapcar (lambda (tree)
+                  (javaimp--map-nodes-from-tree tree function pred))
+                forest)))
+
+(defun javaimp--map-nodes-from-tree (tree function pred)
+  (when tree
+    (let* ((cell (funcall function (javaimp-node-contents tree)))
+           (res
+            (if (car cell)
+                (let ((children
+                       (delq nil
+                             (mapcar (lambda (child)
+                                       (javaimp--map-nodes-from-tree
+                                        child function pred))
+                                     (javaimp-node-children tree)))))
+                  (cons (cdr cell) children))
+              (cdr cell))))
+      (and (funcall pred res)
+           res))))
+
+(defun javaimp--get-root (node)
+  (while (javaimp-node-parent node)
+    (setq node (javaimp-node-parent node)))
+  node)
+
+
+
+;; Other
+
+(defsubst javaimp-print-id (id)
   (format "%s:%s:%s"
           (javaimp-id-artifact id)
           (javaimp-id-group id)
           (javaimp-id-version id)))
 
+(defsubst javaimp--get-file-ts (file)
+  (nth 5 (file-attributes file)))
 
 ;; TODO use functions `cygwin-convert-file-name-from-windows' and
 ;; `cygwin-convert-file-name-to-windows' when they are available
@@ -109,7 +293,6 @@ unchanged."
 	  (push path args)
 	  (car (apply #'process-lines javaimp-cygpath-program args))))
     path))
-
 
 (defun javaimp--call-build-tool (program handler &rest args)
   "Runs PROGRAM with ARGS, then calls HANDLER in the temporary
@@ -136,62 +319,5 @@ buffer and returns its result"
     (split-string (javaimp-cygpath-convert-maybe path 'unix t)
                   (concat "[" path-separator "\n]+")
                   t)))
-
-
-;; Tree building & search
-
-(defun javaimp--build-tree (this parent-node all)
-  (message "Building tree for module: %s" (javaimp-print-id (javaimp-module-id this)))
-  (let ((children
-	 ;; more or less reliable way to find children is to look for
-	 ;; modules with "this" as the parent
-	 (seq-filter (lambda (m)
-		       (equal (javaimp-module-parent-id m) (javaimp-module-id this)))
-		     all)))
-    (let* ((this-node (make-javaimp-node
-		       :parent parent-node
-		       :children nil
-		       :contents this))
-	   ;; recursively build child nodes
-	   (child-nodes
-	    (mapcar (lambda (child)
-		      (javaimp--build-tree child this-node all))
-		    children)))
-      (setf (javaimp-node-children this-node) child-nodes)
-      this-node)))
-
-(defun javaimp--find-node (predicate forest)
-  (catch 'found
-    (dolist (tree forest)
-      (javaimp--find-node-in-tree-1 tree predicate))))
-
-(defun javaimp--find-node-in-tree-1 (tree predicate)
-  (when tree
-    (if (funcall predicate (javaimp-node-contents tree))
-	(throw 'found tree))
-    (dolist (child (javaimp-node-children tree))
-      (javaimp--find-node-in-tree-1 child predicate))))
-
-
-(defun javaimp--collect-nodes (predicate forest)
-  (apply #'seq-concatenate 'list
-	 (mapcar (lambda (tree)
-		   (javaimp--collect-nodes-from-tree tree predicate))
-		 forest)))
-
-(defun javaimp--collect-nodes-from-tree (tree &optional predicate)
-  (when tree
-    (append (when (or (not predicate)
-                      (funcall predicate (javaimp-node-contents tree)))
-	      (list tree))
-	    (apply #'seq-concatenate 'list
-		   (mapcar (lambda (child)
-			     (javaimp--collect-nodes-from-tree child predicate))
-			   (javaimp-node-children tree))))))
-
-(defun javaimp--get-root (node)
-  (while (javaimp-node-parent node)
-    (setq node (javaimp-node-parent node)))
-  node)
 
 (provide 'javaimp-util)

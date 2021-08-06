@@ -23,13 +23,6 @@
 
 (require 'javaimp-util)
 
-(defcustom javaimp-mvn-program "mvn"
-  "Path to the `mvn' program.  Customize it if the program is not
-on `exec-path'."
-  :group 'javaimp
-  :type 'string)
-
-
 (defun javaimp--maven-visit (file)
   "Calls \"mvn help:effective-pom\" on FILE,
 reads project structure from the output and records which files
@@ -87,7 +80,16 @@ resulting module trees."
                                          modules)))
 		        (cdr modules)))))
       (mapcar (lambda (root)
-                (javaimp--build-tree root nil modules))
+                (message "Building tree for root: %s"
+                         (javaimp-print-id (javaimp-module-id root)))
+                (javaimp--build-tree
+                 root modules
+	         ;; more or less reliable way to find
+	         ;; children is to look for modules with
+	         ;; "this" as the parent
+                 (lambda (el tested)
+                   (equal (javaimp-module-parent-id tested)
+                          (javaimp-module-id el)))))
               roots))))
 
 (defun javaimp--maven-effective-pom-handler ()
