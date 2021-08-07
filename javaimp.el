@@ -79,7 +79,7 @@
 (require 'javaimp-gradle)
 (require 'javaimp-parse)
 (require 'cc-mode)                      ;for java-mode-syntax-table
-
+(require 'imenu)
 
 
 ;; User options
@@ -606,7 +606,17 @@ is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
 
 ;;;###autoload
 (defun javaimp-imenu-create-index ()
-  "Function to use as `imenu-create-index-function'."
+  "Function to use as `imenu-create-index-function'.
+
+Currently it requires some manual setup, something like this in
+the `java-mode-hook':
+
+  (setq imenu-create-index-function #'javaimp-imenu-create-index)
+  (setq javaimp--parse-dirty-pos (point-min))
+  (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos)
+
+In future, when we implement a minor / major mode, it will be
+done in mode functions automatically."
   (let ((forest (save-excursion
                   (javaimp--parse-get-imenu-forest))))
     (cond ((not javaimp-imenu-group-methods)
@@ -662,7 +672,9 @@ is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
 
 (defsubst javaimp-imenu--make-entry (scope)
   (list (javaimp-scope-name scope)
-        (javaimp-scope-start scope)
+        (if imenu-use-markers
+            (copy-marker (javaimp-scope-start scope))
+          (javaimp-scope-start scope))
         #'javaimp-imenu--function
         scope))
 
