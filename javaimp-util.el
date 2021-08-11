@@ -42,6 +42,18 @@
    '(anonymous-class statement simple-statement array unknown)
    javaimp--named-scope-types))
 
+(defconst javaimp--help-scope-type-abbrevs
+  '((anonymous-class . "ac")
+    (statement . "st")
+    (simple-statement . "ss")
+    (array . "ar")
+    (unknown . "un")
+    (local-class . "lc")
+    (method . "me")
+    (class . "cl")
+    (interface . "in")
+    (enum . "en")))
+
 
 
 ;; Structs

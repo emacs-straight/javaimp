@@ -165,6 +165,7 @@ throws E1 {"
   (dolist (item test-items)
     (with-temp-buffer
       (insert (nth 0 item))
+      (setq syntax-ppss-table javaimp-syntax-table)
       (setq javaimp--parse-dirty-pos (point-min))
       (let ((scopes (javaimp--parse-get-all-scopes)))
         (should (= 1 (length scopes)))
@@ -181,12 +182,14 @@ throws E1 {"
 /*
 package commented.block;
 */")
+    (setq syntax-ppss-table javaimp-syntax-table)
     (should (equal (javaimp--parse-get-package) "foo.bar.baz"))))
 
 (ert-deftest javaimp-test--parse-get-all-classlikes ()
   (with-temp-buffer
     (insert-file-contents
      (concat javaimp--basedir "testdata/test1-misc-classes.java"))
+    (setq syntax-ppss-table javaimp-syntax-table)
     (setq javaimp--parse-dirty-pos (point-min))
     (should (equal (javaimp--parse-get-all-classlikes)
                    '("Top"
@@ -203,6 +206,7 @@ package commented.block;
   (with-temp-buffer
     (insert-file-contents
      (concat javaimp--basedir "testdata/test1-misc-classes.java"))
+    (setq syntax-ppss-table javaimp-syntax-table)
     (let ((javaimp-format-method-name #'javaimp-format-method-name-types))
       ;;
       ;; parse full buffer
@@ -312,8 +316,10 @@ package commented.block;
          (actual (with-temp-buffer
                    (insert-file-contents
                     (concat javaimp--basedir "testdata/test1-misc-classes.java"))
+                   (setq syntax-ppss-table javaimp-syntax-table)
                    (setq javaimp--parse-dirty-pos (point-min))
-                   (javaimp-imenu-create-index))))
+                   (let ((imenu-use-markers nil))
+                     (javaimp-imenu-create-index)))))
     (javaimp-test--imenu-simplify-entries actual)
     (should
      (equal
@@ -387,8 +393,10 @@ package commented.block;
          (with-temp-buffer
            (insert-file-contents
             (concat javaimp--basedir "testdata/test1-misc-classes.java"))
+           (setq syntax-ppss-table javaimp-syntax-table)
            (setq javaimp--parse-dirty-pos (point-min))
-           (javaimp-imenu-create-index)))
+           (let ((imenu-use-markers nil))
+             (javaimp-imenu-create-index))))
         (expected javaimp-test--imenu-method-list-expected))
     (should (= (length expected) (length actual)))
     (dotimes (i (length expected))
