@@ -395,10 +395,13 @@ non-nil.  Resets this variable after parsing is done."
 ;; Functions intended to be called from other parts of javaimp.
 
 (defun javaimp--parse-get-package ()
-  (goto-char (point-max))
-  (when (javaimp--parse-rsb-keyword
-         "^[ \t]*package[ \t]+\\([^ \t;\n]+\\)[ \t]*;" nil t 1)
-    (match-string 1)))
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-max))
+      (when (javaimp--parse-rsb-keyword
+             "^[ \t]*package[ \t]+\\([^ \t;\n]+\\)[ \t]*;" nil t 1)
+        (match-string 1)))))
 
 (defun javaimp--parse-get-all-classlikes ()
   (mapcar (lambda (scope)
@@ -431,20 +434,24 @@ non-nil.  Resets this variable after parsing is done."
 
 (defun javaimp--parse-get-all-scopes (&optional pred parent-pred)
   "Return all scopes in the current buffer, optionally filtering
-them with PRED, and their parents with PARENT-PRED."
-  (javaimp--parse-all-scopes)
-  (let ((pos (point-max))
-        scope res)
-    (while (setq pos (previous-single-property-change pos 'javaimp-parse-scope))
-      (setq scope (get-text-property pos 'javaimp-parse-scope))
-      (when (and scope
-                 (or (null pred)
-                     (funcall pred scope)))
-        (setq scope (javaimp--copy-scope scope))
-        (when parent-pred
-          (javaimp--filter-scope-parents scope parent-pred))
-        (push scope res)))
-    res))
+them with PRED, and their parents with PARENT-PRED.  Neither of
+them should move point."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (javaimp--parse-all-scopes)
+      (let ((pos (point-max))
+            scope res)
+        (while (setq pos (previous-single-property-change pos 'javaimp-parse-scope))
+          (setq scope (get-text-property pos 'javaimp-parse-scope))
+          (when (and scope
+                     (or (null pred)
+                         (funcall pred scope)))
+            (setq scope (javaimp--copy-scope scope))
+            (when parent-pred
+              (javaimp--filter-scope-parents scope parent-pred))
+            (push scope res)))
+        res))))
 
 (defun javaimp--parse-update-dirty-pos (beg _end _old-len)
   "Function to add to `after-change-functions' hook."

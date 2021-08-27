@@ -457,10 +457,7 @@ prefix arg is given, don't do this filtering."
                javaimp-additional-source-dirs)))
 
 (defun javaimp--dir-above-current-package ()
-  (let ((package (save-excursion
-                   (save-restriction
-                     (widen)
-                     (javaimp--parse-get-package)))))
+  (let ((package (javaimp--parse-get-package)))
     (when package
       (string-remove-suffix
        (mapconcat #'file-name-as-directory
@@ -475,14 +472,23 @@ prefix arg is given, don't do this filtering."
                               (directory-files-recursively dir "\\.java\\'")))))
 
 (defun javaimp--get-file-classes (file)
-  (with-temp-buffer
-    (insert-file-contents file)
-    (setq javaimp--parse-dirty-pos (point-min))
-    (let ((package (javaimp--parse-get-package)))
-      (mapcar (lambda (class)
-                (if package
-                    (concat package "." class)))
-              (javaimp--parse-get-all-classlikes)))))
+  (let ((buf (seq-find (lambda (b) (equal (buffer-file-name b) file))
+                       (buffer-list))))
+    (if buf
+        (with-current-buffer buf
+          (javaimp--get-file-classes-1))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (setq javaimp--parse-dirty-pos (point-min))
+        (javaimp--get-file-classes-1)))))
+
+(defun javaimp--get-file-classes-1 ()
+  (let ((package (javaimp--parse-get-package)))
+    (mapcar (lambda (class)
+              (if package
+                  (concat package "." class)
+                class))
+            (javaimp--parse-get-all-classlikes))))
 
 
 ;; Organizing imports
@@ -618,8 +624,7 @@ the `java-mode-hook':
 
 In future, when we implement a minor / major mode, it will be
 done in mode functions automatically."
-  (let ((forest (save-excursion
-                  (javaimp--parse-get-imenu-forest))))
+  (let ((forest (javaimp--parse-get-imenu-forest)))
     (cond ((not javaimp-imenu-group-methods)
            ;; plain list of methods
            (let ((entries
@@ -722,8 +727,7 @@ start (`javaimp-scope-start') instead."
 (defun javaimp-help-show-scopes ()
   "Show scopes in a *javaimp-scopes* buffer."
   (interactive)
-  (let ((scopes (save-excursion
-                  (javaimp--parse-get-all-scopes)))
+  (let ((scopes (javaimp--parse-get-all-scopes))
         (file buffer-file-name)
         (buf (get-buffer-create "*javaimp-scopes*")))
     (with-current-buffer buf
