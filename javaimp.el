@@ -465,11 +465,11 @@ prefix arg is given, don't do this filtering."
        default-directory))))
 
 (defun javaimp--get-directory-classes (dir)
-  (if (file-accessible-directory-p dir)
-      (seq-mapcat #'javaimp--get-file-classes
-                  (seq-filter (lambda (file)
-                                (not (file-symlink-p file)))
-                              (directory-files-recursively dir "\\.java\\'")))))
+  (when (file-accessible-directory-p dir)
+    (seq-mapcat #'javaimp--get-file-classes
+                (seq-filter (lambda (file)
+                              (not (file-symlink-p file)))
+                            (directory-files-recursively dir "\\.java\\'")))))
 
 (defun javaimp--get-file-classes (file)
   (let ((buf (seq-find (lambda (b) (equal (buffer-file-name b) file))
@@ -483,12 +483,25 @@ prefix arg is given, don't do this filtering."
         (javaimp--get-file-classes-1)))))
 
 (defun javaimp--get-file-classes-1 ()
-  (let ((package (javaimp--parse-get-package)))
+  "Return fully-qualified names of all class-like scopes."
+  (let ((package (javaimp--parse-get-package))
+        (scopes (javaimp--parse-get-all-scopes
+                 (lambda (scope)
+                   (javaimp-test-scope-type scope
+                     javaimp--classlike-scope-types
+                     javaimp--classlike-scope-types)))))
     (mapcar (lambda (class)
               (if package
                   (concat package "." class)
                 class))
-            (javaimp--parse-get-all-classlikes))))
+            (mapcar (lambda (scope)
+                      (let ((name (javaimp-scope-name scope))
+                            (parent-names (javaimp--concat-scope-parents scope)))
+                        (if (string-empty-p parent-names)
+                            name
+                          (concat parent-names "." name))))
+                    scopes))))
+
 
 
 ;; Organizing imports
@@ -624,15 +637,10 @@ the `java-mode-hook':
 
 In future, when we implement a minor / major mode, it will be
 done in mode functions automatically."
-  (let ((forest (javaimp--parse-get-imenu-forest)))
+  (let ((forest (javaimp-imenu--get-forest)))
     (cond ((not javaimp-imenu-group-methods)
            ;; plain list of methods
-           (let ((entries
-                  (mapcar #'javaimp-imenu--make-entry
-                          (seq-sort-by
-                           #'javaimp-scope-start #'<
-                           (javaimp--collect-nodes
-                            #'javaimp--is-imenu-included-method forest))))
+           (let ((entries (javaimp-imenu--make-entries-simple forest))
                  name-alist)
              (mapc (lambda (entry)
                      (setf (alist-get (car entry) name-alist 0 nil #'equal)
@@ -655,26 +663,66 @@ done in mode functions automatically."
                                           (nth 3 entry))
                                          "."
                                          (car entry))))
-                 (mapcar #'javaimp-imenu--make-entry
-                         (seq-sort-by
-                          #'javaimp-scope-start #'<
-                          (javaimp--collect-nodes
-                           #'javaimp--is-imenu-included-method forest)))))
-
+                 (javaimp-imenu--make-entries-simple forest)))
           (t
            ;; group methods inside their enclosing class
            (javaimp--map-nodes
             (lambda (scope)
-              (cond ((javaimp--is-classlike scope)
-                     ;; sub-alist
-                     (cons t (javaimp-scope-name scope)))
-                    ((javaimp--is-imenu-included-method scope)
-                     ;; entry
-                     (cons nil (javaimp-imenu--make-entry scope)))))
+              (if (eq (javaimp-scope-type scope) 'method)
+                  ;; entry
+                  (cons nil (javaimp-imenu--make-entry scope))
+                ;; sub-alist
+                (cons t (javaimp-scope-name scope))))
             (lambda (res)
               (or (functionp (nth 2 res)) ;entry
                   (cdr res)))             ;non-empty sub-alist
             forest)))))
+
+(defun javaimp-imenu--get-forest ()
+  (let* ((scopes (javaimp--parse-get-all-scopes
+                  (lambda (scope)
+                    (javaimp-test-scope-type scope
+                      '(class interface enum method)
+                      javaimp--classlike-scope-types))))
+         (methods (seq-filter
+                   (lambda (scope)
+                     (eq (javaimp-scope-type scope) 'method))
+                   scopes))
+         (classes (seq-filter
+                   (lambda (scope)
+                     (not (eq (javaimp-scope-type scope) 'method)))
+                   scopes))
+         (top-classes (seq-filter (lambda (s)
+                                    (null (javaimp-scope-parent s)))
+                                  classes))
+         (abstract-methods (javaimp--parse-abstract-methods
+                            (seq-filter
+                             (lambda (scope)
+                               (eq (javaimp-scope-type scope) 'interface))
+                             scopes))))
+    (mapcar
+     (lambda (top-class)
+       (message "Building tree for top-level class-like scope: %s"
+                (javaimp-scope-name top-class))
+       (javaimp--build-tree top-class
+                            (append methods
+                                    classes
+                                    abstract-methods)
+                            (lambda (el tested)
+                              (equal el (javaimp-scope-parent tested)))
+                            nil
+                            (lambda (s1 s2)
+                              (< (javaimp-scope-start s1)
+                                 (javaimp-scope-start s2)))))
+     top-classes)))
+
+(defun javaimp-imenu--make-entries-simple (forest)
+  (mapcar #'javaimp-imenu--make-entry
+          (seq-sort-by #'javaimp-scope-start #'<
+                       (javaimp--collect-nodes
+                        (lambda (scope)
+                          (eq (javaimp-scope-type scope) 'method))
+                        forest))))
 
 (defsubst javaimp-imenu--make-entry (scope)
   (list (javaimp-scope-name scope)

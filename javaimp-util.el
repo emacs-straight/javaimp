@@ -32,15 +32,16 @@
 (defconst javaimp--classlike-scope-types
   '(class interface enum))
 
-(defconst javaimp--named-scope-types
-  (append
-   '(local-class method)
-   javaimp--classlike-scope-types))
-
 (defconst javaimp--all-scope-types
   (append
-   '(anonymous-class statement simple-statement array unknown)
-   javaimp--named-scope-types))
+   '(anonymous-class
+     array
+     method
+     simple-statement
+     statement
+     array
+     unknown)
+   javaimp--classlike-scope-types))
 
 (defconst javaimp--help-scope-type-abbrevs
   '((anonymous-class . "ac")
@@ -48,7 +49,6 @@
     (simple-statement . "ss")
     (array . "ar")
     (unknown . "un")
-    (local-class . "lc")
     (method . "me")
     (class . "cl")
     (interface . "in")
@@ -109,20 +109,6 @@
 
 ;; Scopes
 
-(defsubst javaimp--is-classlike (scope)
-  (and scope
-       (memq (javaimp-scope-type scope)
-             javaimp--classlike-scope-types)))
-
-(defsubst javaimp--is-named (scope)
-  (and scope
-       (memq (javaimp-scope-type scope)
-             javaimp--named-scope-types)))
-
-(defsubst javaimp--is-imenu-included-method (scope)
-  (and (eq (javaimp-scope-type scope) 'method)
-       (javaimp--is-classlike (javaimp-scope-parent scope))))
-
 (defun javaimp--copy-scope (scope)
   "Recursively copies SCOPE and its parents."
   (let* ((res (copy-javaimp-scope scope))
@@ -150,6 +136,13 @@ left."
       (push scope parents))
     (mapconcat #'javaimp-scope-name parents ".")))
 
+(defsubst javaimp-test-scope-type (scope leaf-types parent-types)
+  (declare (indent 1))
+  (let ((res (memq (javaimp-scope-type scope) leaf-types)))
+    (while (and res
+                (setq scope (javaimp-scope-parent scope)))
+      (setq res (memq (javaimp-scope-type scope) parent-types)))
+    res))
 
 
 ;;; Formatting
@@ -202,37 +195,41 @@ recursive calls."
       (setf (javaimp-node-children this-node) child-nodes)
       this-node)))
 
-(defun javaimp--find-node (pred forest &optional unwrap)
+(defun javaimp--find-node (contents-pred forest &optional unwrap)
+  "Return first node for which CONTENTS-PRED returns non-nil.  If
+UNWRAP is non-nil, then node contents is returned."
   (catch 'found
     (dolist (tree forest)
-      (javaimp--find-node-in-tree tree pred unwrap))))
+      (javaimp--find-node-in-tree tree contents-pred unwrap))))
 
-(defun javaimp--find-node-in-tree (tree pred unwrap)
+(defun javaimp--find-node-in-tree (tree contents-pred unwrap)
   (when tree
-    (if (funcall pred (javaimp-node-contents tree))
+    (if (funcall contents-pred (javaimp-node-contents tree))
 	(throw 'found
                (if unwrap
                    (javaimp-node-contents tree)
                  tree)))
     (dolist (child (javaimp-node-children tree))
-      (javaimp--find-node-in-tree child pred unwrap))))
+      (javaimp--find-node-in-tree child contents-pred unwrap))))
 
 
-(defun javaimp--collect-nodes (pred forest)
+(defun javaimp--collect-nodes (contents-pred forest)
+  "Return all nodes' contents for which CONTENTS-PRED returns
+non-nil."
   (apply #'seq-concatenate 'list
 	 (mapcar (lambda (tree)
                    (delq nil
-		         (javaimp--collect-nodes-from-tree tree pred)))
+		         (javaimp--collect-nodes-from-tree tree contents-pred)))
 		 forest)))
 
-(defun javaimp--collect-nodes-from-tree (tree pred)
+(defun javaimp--collect-nodes-from-tree (tree contents-pred)
   (when tree
-    (cons (and (funcall pred (javaimp-node-contents tree))
+    (cons (and (funcall contents-pred (javaimp-node-contents tree))
                (javaimp-node-contents tree))
 	  (apply #'seq-concatenate 'list
 		 (mapcar (lambda (child)
                            (delq nil
-			         (javaimp--collect-nodes-from-tree child pred)))
+			         (javaimp--collect-nodes-from-tree child contents-pred)))
 			 (javaimp-node-children tree))))))
 
 
