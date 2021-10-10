@@ -142,37 +142,22 @@ Customize it if the program is not on `exec-path'."
 Customize it if the program is not on `exec-path'."
   :type 'string)
 
-(defcustom javaimp-include-current-module-classes t
-  "If non-nil, current module's classes are included into
-completion alternatives.  `javaimp-add-import' will find all java
-files in the current project and add their fully-qualified names
-to the completion alternatives list."
+(defcustom javaimp-enable-parsing t
+  "If non-nil, javaimp will try to parse current module's source
+files to determine completion alternatives, in addition to those
+from module dependencies."
   :type 'boolean)
 
-(defcustom javaimp-imenu-group-methods t
-  "How to lay out methods in Imenu index.
-If t (the default), methods are grouped in their enclosing
-scopes.  nil means use just flat list of simple method names.
-`qualified' means use flat list where each method name is
-prepended with nested scopes.  See also
-`javaimp-format-method-name'."
-  :type '(choice :tag "Group methods"
-		 (const :tag "Group into enclosing scopes" t)
-		 (const :tag "Flat list of simple name" nil)
-		 (const :tag "Flat list of qualified names" qualified)))
+(defcustom javaimp-imenu-use-sub-alists nil
+  "If non-nil, make sub-alist for each containing scope (e.g. a
+class)."
+  :type 'boolean)
 
 (defcustom javaimp-cygpath-program
   (if (eq system-type 'cygwin) "cygpath")
   "Path to the `cygpath' program (Cygwin only).  Customize it if
 the program is not on `exec-path'."
   :type 'string)
-
-(defcustom javaimp-format-method-name #'javaimp-format-method-name-full
-  "Function to format method name, invoked with 3 arguments:
-NAME, ARGS and THROWS-ARGS.  The last two are lists with elements
-of the form (TYPE . NAME).  For THROWS-ARGS, only TYPE is
-present."
-  :type 'function)
 
 (defcustom javaimp-mvn-program "mvn"
   "Path to the `mvn' program.  Customize it if the program is not
@@ -218,31 +203,43 @@ directory containing pom.xml / build.gradle[.kts].
 After being processed by this command, the module tree becomes
 known to javaimp and `javaimp-add-import' may be called inside
 any module file."
-  (interactive "DVisit Maven or Gradle project in directory: ")
-  (let* ((exp-dir (expand-file-name (file-name-as-directory dir)))
-         build-file
-         (trees (cond
-                 ((file-regular-p (setq build-file (concat exp-dir "pom.xml")))
-                  (javaimp--maven-visit build-file))
-                 ((or (file-regular-p
-                       (setq build-file (concat exp-dir "build.gradle")))
-                      (file-regular-p
-                       (setq build-file (concat exp-dir "build.gradle.kts"))))
-                  (list (javaimp--gradle-visit build-file)))
-                 (t
-                  (error "Could not find build file in dir %s" dir)))))
-    ;; delete previous tree(s) loaded from this build file, if any
-    (setq javaimp-project-forest
-	  (seq-remove (lambda (node)
-			(equal (javaimp-module-file-orig (javaimp-node-contents node))
-			       build-file))
-		      javaimp-project-forest))
-    (push (car trees) javaimp-project-forest)
-    (dolist (node (cdr trees))
-      (when (y-or-n-p (format "Include additional project tree rooted at %S? "
-                              (javaimp-module-id (javaimp-node-contents node))))
-        (push node javaimp-project-forest)))
-    (message "Loaded tree for %s" dir)))
+  (interactive "DVisit Gradle or Maven project in directory: ")
+  (setq dir (file-name-as-directory (expand-file-name dir)))
+  (if-let ((build-file
+            (seq-find #'file-exists-p
+                      (mapcar (lambda (f)
+                                (concat dir f))
+                              '("build.gradle" "build.gradle.kts"
+                                "pom.xml")))))
+      (progn
+        ;; Forget previous tree(s) loaded from this build file, if
+        ;; any.  Additional project trees (see below) have the same
+        ;; file-orig, so there may be several here.
+        (when-let ((existing-list
+                    (seq-filter (lambda (node)
+                                  (equal (javaimp-module-file-orig
+                                          (javaimp-node-contents node))
+	                                 build-file))
+                                javaimp-project-forest)))
+          (if (y-or-n-p "Forget already loaded project(s)?")
+              (setq javaimp-project-forest
+                    (seq-remove (lambda (node)
+                                  (memq node existing-list))
+                                javaimp-project-forest))
+            (user-error "Aborted")))
+        (let ((trees (funcall (if (string-match
+                                   "gradle" (file-name-nondirectory build-file))
+                                  #'javaimp--gradle-visit
+                                #'javaimp--maven-visit)
+                              build-file)))
+          (push (car trees) javaimp-project-forest)
+          (dolist (node (cdr trees))
+            (when (y-or-n-p
+                   (format "Include additional project tree rooted at %S?"
+                           (javaimp-module-id (javaimp-node-contents node))))
+              (push node javaimp-project-forest)))
+          (message "Loaded tree for %s" dir)))
+    (error "Could not find build file in directory %s" dir)))
 
 
 ;; Dependency jars
@@ -363,22 +360,23 @@ Completion alternatives are constructed as follows:
 
 - If `javaimp-java-home' is set then add JDK classes.  lib-dir is
 \"jre/lib\" or \"lib\" subdirectory.  First, attempt to read jmod
-files in \"lib-dir/jmods\" subdirectory.  If there's jmods
-subdirectory - fallback to reading all jar files in lib-dir.
+files in \"lib-dir/jmods\" subdirectory.  If there's no jmods
+subdirectory - fallback to reading all jar files in lib-dir, this
+is for pre-jdk9 versions of java.
 
 - If current module can be determined, then add all classes from
-sits dependencies.
+its dependencies.
 
-- If `javaimp-include-current-module-classes' is set, then add
-current module's classes.  If there's no current module, then add
-all classes from the current file tree: if there's a \"package\"
+- If `javaimp-enable-parsing' is non-nil, also add current
+module's classes.  If there's no current module, then add all
+classes from the current file tree: if there's a \"package\"
 directive in the current file and it matches last components of
 the file name, then file tree starts in the parent directory of
 the package, otherwise just use current directory.
 
-- Keep only candidates whose class simple name (last component of
-a fully-qualified name) matches current `symbol-at-point'.  If a
-prefix arg is given, don't do this filtering."
+- If no prefix arg is given, keep only candidates whose class
+simple name (last component of a fully-qualified name) matches
+current `symbol-at-point'."
   (interactive
    (let* ((file (expand-file-name (or buffer-file-name
 				      (error "Buffer is not visiting a file!"))))
@@ -407,11 +405,9 @@ prefix arg is given, don't do this filtering."
 		     (mapcar #'javaimp--get-jar-classes
                              (javaimp-module-dep-jars module))))
             ;; current module or source tree
-            (when javaimp-include-current-module-classes
-              (if module
-                  (javaimp--get-module-classes module)
-                (javaimp--get-directory-classes
-                 (or (javaimp--dir-above-current-package) default-directory))))
+            (when javaimp-enable-parsing
+              (seq-mapcat #'javaimp--get-directory-classes
+                          (javaimp--get-current-source-dirs module)))
             ))
           (completion-regexp-list
            (and (not current-prefix-arg)
@@ -443,25 +439,24 @@ prefix arg is given, don't do this filtering."
                            (directory-files dir t "\\.jar\\'")))
           (user-error "JRE lib dir \"%s\" doesn't exist" dir))))))
 
-(defun javaimp--get-module-classes (module)
-  "Returns list of classes in current module"
-  (append
-   ;; source dirs
-   (seq-mapcat #'javaimp--get-directory-classes
-               (javaimp-module-source-dirs module))
-   ;; additional source dirs
-   (seq-mapcat (lambda (rel-dir)
-                 (javaimp--get-directory-classes
-                  (concat (javaimp-module-build-dir module)
-                          (file-name-as-directory rel-dir))))
-               javaimp-additional-source-dirs)))
-
-(defun javaimp--dir-above-current-package ()
-  (let ((package (javaimp--parse-get-package)))
-    (when package
-      (string-remove-suffix
-       (mapconcat #'file-name-as-directory
-                  (split-string package "\\." t) nil)
+(defun javaimp--get-current-source-dirs (module)
+  "Return list of source directories to check for Java files."
+  (if module
+      (append
+       (javaimp-module-source-dirs module)
+       ;; additional source dirs
+       (mapcar (lambda (dir)
+                 (concat (javaimp-module-build-dir module)
+                         (file-name-as-directory dir)))
+               javaimp-additional-source-dirs))
+    (list
+     (if-let ((package (save-excursion
+                         (save-restriction
+                           (widen)
+                           (javaimp--parse-get-package)))))
+         (string-remove-suffix
+          (mapconcat #'file-name-as-directory (split-string package "\\." t) nil)
+          default-directory)
        default-directory))))
 
 (defun javaimp--get-directory-classes (dir)
@@ -472,17 +467,17 @@ prefix arg is given, don't do this filtering."
                             (directory-files-recursively dir "\\.java\\'")))))
 
 (defun javaimp--get-file-classes (file)
-  (let ((buf (seq-find (lambda (b) (equal (buffer-file-name b) file))
-                       (buffer-list))))
-    (if buf
-        (with-current-buffer buf
-          (javaimp--get-file-classes-1))
-      (with-temp-buffer
-        (insert-file-contents file)
-        (setq javaimp--parse-dirty-pos (point-min))
-        (javaimp--get-file-classes-1)))))
+  (if-let ((buf (get-file-buffer file)))
+      (with-current-buffer buf
+        (save-excursion
+          (save-restriction
+            (widen)
+            (javaimp--get-classes))))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (javaimp--get-classes))))
 
-(defun javaimp--get-file-classes-1 ()
+(defun javaimp--get-classes ()
   "Return fully-qualified names of all class-like scopes."
   (let ((package (javaimp--parse-get-package))
         (scopes (javaimp--parse-get-all-scopes
@@ -625,58 +620,42 @@ is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
 
 ;;;###autoload
 (defun javaimp-imenu-create-index ()
-  "Function to use as `imenu-create-index-function'.
-
-Currently it requires some manual setup, something like this in
-the `java-mode-hook':
-
-  (setq imenu-create-index-function #'javaimp-imenu-create-index)
-  (setq syntax-ppss-table javaimp-syntax-table)
-  (setq javaimp--parse-dirty-pos (point-min))
-  (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos)
-
-In future, when we implement a minor / major mode, it will be
-done in mode functions automatically."
+  "Function to use as `imenu-create-index-function', can be set
+in a major mode hook."
   (let ((forest (javaimp-imenu--get-forest)))
-    (cond ((not javaimp-imenu-group-methods)
-           ;; plain list of methods
-           (let ((entries (javaimp-imenu--make-entries-simple forest))
-                 name-alist)
-             (mapc (lambda (entry)
-                     (setf (alist-get (car entry) name-alist 0 nil #'equal)
-                           (1+ (alist-get (car entry) name-alist 0 nil #'equal))))
-                   entries)
-             (mapc (lambda (entry)
-                     ;; disambiguate same method names
-                     (when (> (alist-get (car entry) name-alist 0 nil #'equal) 1)
-                       (setcar entry
-                               (format "%s [%s]"
-                                       (car entry)
-                                       (javaimp--concat-scope-parents
-                                        (nth 3 entry))))))
-                   entries)))
-          ((eq javaimp-imenu-group-methods 'qualified)
-           ;; list of qualified methods
-           (mapc (lambda (entry)
-                   ;; prepend parents to name
-                   (setcar entry (concat (javaimp--concat-scope-parents
-                                          (nth 3 entry))
-                                         "."
-                                         (car entry))))
-                 (javaimp-imenu--make-entries-simple forest)))
-          (t
-           ;; group methods inside their enclosing class
-           (javaimp--map-nodes
-            (lambda (scope)
-              (if (eq (javaimp-scope-type scope) 'method)
-                  ;; entry
-                  (cons nil (javaimp-imenu--make-entry scope))
-                ;; sub-alist
-                (cons t (javaimp-scope-name scope))))
-            (lambda (res)
-              (or (functionp (nth 2 res)) ;entry
-                  (cdr res)))             ;non-empty sub-alist
-            forest)))))
+    (if javaimp-imenu-use-sub-alists
+        (javaimp--map-nodes
+         (lambda (scope)
+           (if (eq (javaimp-scope-type scope) 'method)
+               ;; entry
+               (cons nil (javaimp-imenu--make-entry scope))
+             ;; sub-alist
+             (cons t (javaimp-scope-name scope))))
+         (lambda (res)
+           (or (functionp (nth 2 res)) ;entry
+               (cdr res)))             ;non-empty sub-alist
+         forest)
+      (let ((entries
+             (mapcar #'javaimp-imenu--make-entry
+                     (seq-sort-by #'javaimp-scope-start #'<
+                                  (javaimp--collect-nodes
+                                   (lambda (scope)
+                                     (eq (javaimp-scope-type scope) 'method))
+                                   forest))))
+            alist)
+        (mapc (lambda (entry)
+                (setf (alist-get (car entry) alist 0 nil #'equal)
+                      (1+ (alist-get (car entry) alist 0 nil #'equal))))
+              entries)
+        (mapc (lambda (entry)
+                ;; disambiguate same method names
+                (when (> (alist-get (car entry) alist 0 nil #'equal) 1)
+                  (setcar entry
+                          (format "%s [%s]"
+                                  (car entry)
+                                  (javaimp--concat-scope-parents
+                                   (nth 3 entry))))))
+              entries)))))
 
 (defun javaimp-imenu--get-forest ()
   (let* ((scopes (javaimp--parse-get-all-scopes
@@ -695,11 +674,9 @@ done in mode functions automatically."
          (top-classes (seq-filter (lambda (s)
                                     (null (javaimp-scope-parent s)))
                                   classes))
-         (abstract-methods (javaimp--parse-abstract-methods
-                            (seq-filter
-                             (lambda (scope)
-                               (eq (javaimp-scope-type scope) 'interface))
-                             scopes))))
+         (abstract-methods (append
+                            (javaimp--parse-get-class-abstract-methods)
+                            (javaimp--parse-get-interface-abstract-methods))))
     (mapcar
      (lambda (top-class)
        (message "Building tree for top-level class-like scope: %s"
@@ -715,14 +692,6 @@ done in mode functions automatically."
                               (< (javaimp-scope-start s1)
                                  (javaimp-scope-start s2)))))
      top-classes)))
-
-(defun javaimp-imenu--make-entries-simple (forest)
-  (mapcar #'javaimp-imenu--make-entry
-          (seq-sort-by #'javaimp-scope-start #'<
-                       (javaimp--collect-nodes
-                        (lambda (scope)
-                          (eq (javaimp-scope-type scope) 'method))
-                        forest))))
 
 (defsubst javaimp-imenu--make-entry (scope)
   (list (javaimp-scope-name scope)
@@ -775,7 +744,10 @@ start (`javaimp-scope-start') instead."
 (defun javaimp-help-show-scopes ()
   "Show scopes in a *javaimp-scopes* buffer."
   (interactive)
-  (let ((scopes (javaimp--parse-get-all-scopes))
+  (let ((scopes (save-excursion
+                  (save-restriction
+                    (widen)
+                    (javaimp--parse-get-all-scopes))))
         (file buffer-file-name)
         (buf (get-buffer-create "*javaimp-scopes*")))
     (with-current-buffer buf

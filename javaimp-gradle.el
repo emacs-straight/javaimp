@@ -22,7 +22,8 @@
 
 (defconst javaimp--gradle-task-body
   (with-temp-buffer
-    (insert-file-contents (expand-file-name "gradleTaskBody.inc.kts" javaimp--basedir))
+    (insert-file-contents
+     (expand-file-name "gradleTaskBody.inc.kts" javaimp--basedir))
     (buffer-string))
   "Task body, uses syntax which can be used both in Groovy and Kotlin")
 
@@ -43,15 +44,22 @@ information."
     ;; first module is always root
     (message "Building tree for root: %s"
              (javaimp-print-id (javaimp-module-id (car modules))))
-    (javaimp--build-tree (car modules) modules
-	                 ;; more or less reliable way to find children
-	                 ;; is to look for modules with "this" as the
-	                 ;; parent
-                         (lambda (el tested)
-                           (equal (javaimp-module-parent-id tested)
-                                  (javaimp-module-id el))))))
+    (list
+     (javaimp--build-tree (car modules) modules
+	                  ;; more or less reliable way to find children
+	                  ;; is to look for modules with "this" as the
+	                  ;; parent
+                          (lambda (el tested)
+                            (equal (javaimp-module-parent-id tested)
+                                   (javaimp-module-id el)))))))
 
 (defun javaimp--gradle-handler ()
+  "Parse current buffer into list of project descriptors, each of
+which is an alist of attributes (NAME . VALUE).  Each attribute
+occupies one line, and is of the form 'NAME=VALUE'.  See file
+'gradleTaskBody.inc.kts' for the script which generates such
+output.  Attribute 'id' signifies the start of another
+descriptor."
   (goto-char (point-min))
   (let (alist res sym val)
     (while (re-search-forward "^\\([[:alnum:]-]+\\)=\\(.*\\)$" nil t)
@@ -68,16 +76,18 @@ information."
     (nreverse res)))
 
 (defun javaimp--gradle-module-from-alist (alist file-orig)
+  "Make `javaimp-module' structure out of attribute alist ALIST."
   (make-javaimp-module
-   :id (javaimp--gradle-id-from-semi-separated (cdr (assq 'id alist)))
-   :parent-id (javaimp--gradle-id-from-semi-separated (cdr (assq 'parent-id alist)))
+   :id (javaimp--gradle-id-from-semi-separated
+        (cdr (assq 'id alist)))
+   :parent-id (javaimp--gradle-id-from-semi-separated
+               (cdr (assq 'parent-id alist)))
    :file (cdr (assq 'file alist))
    :file-orig file-orig
    ;; jar/war supported
-   :final-name (let ((final-name (javaimp-cygpath-convert-maybe
-                                  (cdr (assq 'final-name alist)))))
-                 (and final-name
-                      (member (file-name-extension final-name) '("jar" "war"))
+   :final-name (when-let ((final-name (javaimp-cygpath-convert-maybe
+                                       (cdr (assq 'final-name alist)))))
+                 (and (member (file-name-extension final-name) '("jar" "war"))
                       final-name))
    :source-dirs (mapcar #'file-name-as-directory
                         (javaimp--split-native-path
@@ -92,7 +102,8 @@ information."
 
 (defun javaimp--gradle-id-from-semi-separated (str)
   (when str
-    (let ((parts (split-string str ";" t)) artifact)
+    (let ((parts (split-string str ";" t))
+          artifact)
       (unless (= (length parts) 3)
         (error "Invalid project id: %s" str))
       (setq artifact (nth 1 parts))
@@ -101,12 +112,13 @@ information."
         ;; convert "[:]foo:bar:baz" into "foo.bar.baz"
         (setq artifact (replace-regexp-in-string
                         ":" "." (string-remove-prefix ":" artifact))))
-      (make-javaimp-id :group (nth 0 parts) :artifact artifact
+      (make-javaimp-id :group (nth 0 parts)
+                       :artifact artifact
                        :version (nth 2 parts)))))
 
 (defun javaimp--gradle-fetch-dep-jars-path (module)
-  ;; always invoke on root file becase module's file may not exist
-  ;; (even if reported as project.buildFile property)
+  ;; Always invoke on root file becase module's file may not exist,
+  ;; even if reported by Gradle as project.buildFile
   (javaimp--gradle-call (javaimp-module-file-orig module)
                         javaimp--gradle-task-body
                         (lambda ()
@@ -118,11 +130,13 @@ information."
 
 (defun javaimp--gradle-call (file init-script-body handler task)
   (let* ((is-kotlin (equal (file-name-extension file) "kts"))
-         (init-file (make-temp-file "javaimp" nil
-                                    (if is-kotlin ".kts")
-                                    (if is-kotlin
-                                        (javaimp--gradle-init-script-kotlin init-script-body)
-                                      (javaimp--gradle-init-script init-script-body))))
+         (init-file
+          (make-temp-file "javaimp" nil
+                          (if is-kotlin ".kts")
+                          (funcall (if is-kotlin
+                                       #'javaimp--gradle-init-script-kotlin
+                                     #'javaimp--gradle-init-script)
+                                   init-script-body)))
          (local-gradlew (concat (file-name-directory file) "gradlew")))
     (javaimp--call-build-tool
      (if (file-exists-p local-gradlew)

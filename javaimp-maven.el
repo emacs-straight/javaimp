@@ -41,22 +41,12 @@ resulting module trees."
 	 (modules (mapcar (lambda (proj-elt)
                             (javaimp--maven-module-from-xml proj-elt file))
                           projects)))
-
-    ;; Set :file slots in a separate step because Maven doesn't seem
-    ;; to give pom.xml file location for each subproject.  We build
-    ;; tree below by using child->parent links (<parent> in child
-    ;; pom.xml), that also doesn't help to find pom.xml itself.
-    ;; Furthermore, the reverse link (<modules> in parent) may not
-    ;; correspond to a project's real children.  So we take this
-    ;; approach: starting from the top-level pom.xml, descend into
-    ;; children using <modules>.  For each child pom.xml, find its
-    ;; corresponding module by id in the whole module list, and set
-    ;; that module's :file.
+    ;; Set :file slots in a separate step because Maven doesn't give
+    ;; pom.xml file location for each subproject.
     (javaimp--maven-fill-modules-files file modules)
-    (when-let ((without-files
-                (seq-filter (lambda (m)
-                              (null (javaimp-module-file m)))
-                            modules)))
+    (when-let ((without-files (seq-filter (lambda (m)
+                                            (null (javaimp-module-file m)))
+                                          modules)))
       (error "Cannot find file for module(s): %s"
              (mapconcat (lambda (m)
                           (javaimp-print-id (javaimp-module-id m)))
@@ -64,15 +54,15 @@ resulting module trees."
                         ", ")))
     (dolist (m modules)
       (setf (javaimp-module-raw m) nil)) ;no longer need it
-
+    ;; Build project trees
     (let ((roots
            (cons
             (car modules)               ;first module is always root
-            ;; In some rare cases, a project inside a tree has
-            ;; parent outside the tree (examples: "log4j-bom" in
+            ;; In some rare cases, a project inside a tree has parent
+            ;; outside the tree (examples: "log4j-bom" in
             ;; log4j-2.11.2, "external" in jaxb-ri-2.3.3).  Such
-            ;; projects didn't get it into the tree, and we need
-            ;; to add them a separate roots.
+            ;; projects didn't get into the tree, and we need to add
+            ;; them a separate roots.
             (seq-filter (lambda (m)
                           (not (seq-find (lambda (aux)
                                            (equal (javaimp-module-id aux)
@@ -84,9 +74,8 @@ resulting module trees."
                          (javaimp-print-id (javaimp-module-id root)))
                 (javaimp--build-tree
                  root modules
-	         ;; more or less reliable way to find
-	         ;; children is to look for modules with
-	         ;; "this" as the parent
+	         ;; more or less reliable way to find children is to
+	         ;; look for modules with "this" as the parent
                  (lambda (el tested)
                    (equal (javaimp-module-parent-id tested)
                           (javaimp-module-id el)))))
@@ -104,7 +93,7 @@ resulting module trees."
 	   (progn
 	     (goto-char (point-min))
 	     (re-search-forward "<\\(projects?\\)")
-	     ;; corresponding close tag is the end of parse region
+	     ;; find corresponding close tag
 	     (search-forward (concat "</" (match-string 1) ">"))
 	     (match-end 0)))))
     (xml-parse-region start end)))
@@ -149,10 +138,12 @@ resulting module trees."
    :version (javaimp--xml-first-child (javaimp--xml-child 'version elt))))
 
 (defun javaimp--maven-fill-modules-files (file modules)
-  ;; Reads module id from FILE, looks up corresponding module in
-  ;; MODULES, sets its :file slot, then recurses for each submodule.
-  ;; A submodule file path is constructed by appending relative path
-  ;; taken from <module> to FILE's directory.
+  "Reads <module> ids from FILE, looks up corresponding modules in
+MODULES, sets their :file slot, then recurses for each of them.
+A submodule file path is constructed by appending relative path
+taken from <module> to FILE's directory.  This seems to be the
+most reliable way, because relationships between modules in Maven
+are somewhat arbitrary."
   (let* ((xml-tree (with-temp-buffer
 		     (insert-file-contents file)
 		     (xml-parse-region (point-min) (point-max))))
@@ -181,14 +172,14 @@ resulting module trees."
 
     (setf (javaimp-module-file module) file)
 
-    ;; Take <module> subelements from raw project, not from file,
-    ;; because Maven can extend the list with elements from profiles.
-    (let ((rel-paths
-           (mapcar #'javaimp--xml-first-child
-		   (javaimp--xml-children
-                    (javaimp--xml-child 'modules (javaimp-module-raw module))
-                    'module))))
-      ;; recurse into each child <module>
+    ;; Take <module> subelements from information we've got from
+    ;; help:effective-pom because Maven can extend the list in the
+    ;; file with elements from profiles
+    (let* ((submodules-elt
+            (javaimp--xml-child 'modules (javaimp-module-raw module)))
+           (submodules (javaimp--xml-children submodules-elt 'module))
+           (rel-paths (mapcar #'javaimp--xml-first-child submodules)))
+      ;; recurse into each submodule
       (dolist (rel-path rel-paths)
 	(javaimp--maven-fill-modules-files
          (concat (file-name-directory file)

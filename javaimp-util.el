@@ -145,32 +145,6 @@ left."
     res))
 
 
-;;; Formatting
-
-(defsubst javaimp-format-method-name-full (name args throws-args)
-  "Outputs NAME, ARGS (name and type) and THROWS-ARGS (only type)."
-  (concat name
-          "("
-          (mapconcat (lambda (arg)
-                       (concat (car arg) " " (cdr arg)))
-                     args
-                     ", ")
-          ")"
-          (if throws-args
-              (concat " throws "
-                      (mapconcat #'car throws-args ", ")))
-          ))
-
-(defsubst javaimp-format-method-name-types (name args _throws-args)
-  "Outputs NAME and ARGS (only type)."
-  (concat name
-          "("
-          (mapconcat #'car args ", ")
-          ")"
-          ))
-
-
-
 ;; Tree
 
 (defun javaimp--build-tree (this all child-p &optional parent-node sort-pred)
