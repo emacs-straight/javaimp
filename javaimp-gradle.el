@@ -20,24 +20,14 @@
 
 (require 'javaimp-util)
 
-(defconst javaimp--gradle-task-body
-  (with-temp-buffer
-    (insert-file-contents
-     (expand-file-name "gradleTaskBody.inc.kts" javaimp--basedir))
-    (buffer-string))
-  "Task body, uses syntax which can be used both in Groovy and Kotlin")
-
 (defun javaimp--gradle-visit (file)
   "Calls gradle on FILE to get various project information.
 
 Passes specially crafted init file as -I argument to gradle and
-invokes task contained in it.  This task returns all needed
+invokes task contained in it.  This task outputs all needed
 information."
   (message "Visiting Gradle build file %s..." file)
-  (let* ((alists (javaimp--gradle-call file
-                                       javaimp--gradle-task-body
-                                       #'javaimp--gradle-handler
-                                       "javaimpTask"))
+  (let* ((alists (javaimp--gradle-call file #'javaimp--gradle-handler))
          (modules (mapcar (lambda (alist)
                             (javaimp--gradle-module-from-alist alist file))
                           alists)))
@@ -116,55 +106,36 @@ descriptor."
                        :artifact artifact
                        :version (nth 2 parts)))))
 
-(defun javaimp--gradle-fetch-dep-jars-path (module)
-  ;; Always invoke on root file becase module's file may not exist,
-  ;; even if reported by Gradle as project.buildFile
-  (javaimp--gradle-call (javaimp-module-file-orig module)
-                        javaimp--gradle-task-body
-                        (lambda ()
-                          (re-search-forward "^dep-jars=\\(.*\\)$")
-                          (match-string 1))
-                        (concat (if (javaimp-module-parent-id module)
-                                    (concat ":" (javaimp-id-artifact (javaimp-module-id module))))
-                                ":javaimpTask")))
+(defun javaimp--gradle-fetch-dep-jars-path (module ids)
+  (javaimp--gradle-call
+   ;; Always invoke on orig file (which is root build script)
+   ;; because module's own file may not exist, even if reported by
+   ;; Gradle as project.buildFile
+   (javaimp-module-file-orig module)
+   (lambda ()
+     (re-search-forward "^dep-jars=\\(.*\\)$")
+     (match-string 1))
+   (let ((mod-path (mapconcat #'javaimp-id-artifact (cdr ids) ":")))
+     (unless (string-empty-p mod-path)
+       (format ":%s:" mod-path)))))
 
-(defun javaimp--gradle-call (file init-script-body handler task)
-  (let* ((is-kotlin (equal (file-name-extension file) "kts"))
-         (init-file
-          (make-temp-file "javaimp" nil
-                          (if is-kotlin ".kts")
-                          (funcall (if is-kotlin
-                                       #'javaimp--gradle-init-script-kotlin
-                                     #'javaimp--gradle-init-script)
-                                   init-script-body)))
-         (local-gradlew (concat (file-name-directory file) "gradlew")))
+(defun javaimp--gradle-call (file handler &optional mod-path)
+  (let* ((local-gradlew (concat (file-name-directory file) "gradlew"))
+         (gradlew (if (file-exists-p local-gradlew)
+                      local-gradlew
+                    javaimp-gradle-program)))
     (javaimp--call-build-tool
-     (if (file-exists-p local-gradlew)
-         local-gradlew
-       javaimp-gradle-program)
+     gradlew
      handler
      "-q"
+     ;; It's easier for us to track jars instead of classes for java-library
+     ;; projects.  See
+     ;; https://docs.gradle.org/current/userguide/java_library_plugin.html#sec:java_library_classes_usage
+     "-Dorg.gradle.java.compile-classpath-packaging=true"
      "-b" (javaimp-cygpath-convert-maybe file)
-     "-I" (javaimp-cygpath-convert-maybe init-file)
-     task)))
-
-
-(defun javaimp--gradle-init-script (body)
-  (concat "
-import java.io.File
-import java.util.stream.Collectors
-allprojects {
-  task javaimpTask {"
-          body
-          "} }"))
-
-(defun javaimp--gradle-init-script-kotlin (body)
-  (concat "
-import java.io.File
-import java.util.stream.Collectors
-allprojects {
-  tasks.register(\"javaimpTask\") {"
-          body
-          "} }"))
+     "-I" (javaimp-cygpath-convert-maybe
+           (expand-file-name "javaimp-init-script.gradle"
+                             javaimp--basedir))
+     (concat mod-path "javaimpTask"))))
 
 (provide 'javaimp-gradle)

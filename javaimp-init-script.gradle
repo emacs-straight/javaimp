@@ -1,0 +1,52 @@
+import java.io.File
+import java.util.stream.Collectors
+
+allprojects {
+    task javaimpTask {
+        doLast {
+            println("id=${project.group};${project.path};${project.version}")
+            if (project.parent != null) {
+                print("parent-id=${project.parent.group};")
+                println("${project.parent.path};${project.parent.version}")
+            }
+            println("file=${project.buildFile}")
+            println("build-dir=${project.buildDir}")
+
+            String finalName = ""
+            String sourceDirs = ""
+            String depJars = ""
+            if (project.pluginManager.hasPlugin("java")) {
+                // "archives" configuration and "sourceSets" property
+                // are defined by Java plugin
+
+                finalName = project.configurations.getByName("archives").artifacts.stream()
+                    .filter {
+                        it.type.equals("jar") || it.type.equals("war")
+                    }
+                    .map { it.file.path }
+                    .findFirst()
+                    .orElse("")
+                sourceDirs = project.sourceSets.stream()
+                    .flatMap {
+                        it.allJava.srcDirs.stream()
+                            .map { it.path }
+                    }
+                    .distinct()
+                    .collect(Collectors.joining(File.pathSeparator))
+                depJars = project.sourceSets.stream()
+                    .flatMap {
+                        it.compileClasspath.files.stream()
+                            .filter {
+                                it.name.endsWith("jar")
+                            }
+                            .map { it.path }
+                    }
+                    .distinct()
+                    .collect(Collectors.joining(File.pathSeparator))
+            }
+            println("final-name=${finalName}")
+            println("source-dirs=${sourceDirs}")
+            println("dep-jars=${depJars}")
+        }
+    }
+}

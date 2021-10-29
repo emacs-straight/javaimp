@@ -246,7 +246,7 @@ any module file."
 
 (defun javaimp--update-module-maybe (node)
   (let ((module (javaimp-node-contents node))
-	need-update)
+	need-update ids)
     ;; check if deps are initialized
     (unless (javaimp-module-dep-jars module)
       (message "Loading dependencies: %s" (javaimp-module-id module))
@@ -254,21 +254,26 @@ any module file."
     ;; check if this or any parent build file has changed since we
     ;; loaded the module
     (let ((tmp node))
-      (while (and tmp (not need-update))
+      (while tmp
 	(let ((cur (javaimp-node-contents tmp)))
-	  (when (> (max (if (file-exists-p (javaimp-module-file cur))
-                            (float-time (javaimp--get-file-ts (javaimp-module-file cur)))
-                          -1)
-                        (if (file-exists-p (javaimp-module-file-orig cur))
-                            (float-time (javaimp--get-file-ts (javaimp-module-file-orig cur)))
-                          -1))
-		   (float-time (javaimp-module-load-ts module)))
-	    (message "Will reload dependencies for %s (some build-file changed)"
+	  (when (and (not need-update)
+                     (> (max (if (file-exists-p (javaimp-module-file cur))
+                                 (float-time
+                                  (javaimp--get-file-ts (javaimp-module-file cur)))
+                               -1)
+                             (if (file-exists-p (javaimp-module-file-orig cur))
+                                 (float-time
+                                  (javaimp--get-file-ts (javaimp-module-file-orig cur)))
+                               -1))
+		        (float-time (javaimp-module-load-ts module))))
+	    (message "Will reload dependencies for %s because build file changed"
                      (javaimp-module-id cur))
-	    (setq need-update t)))
+	    (setq need-update t))
+          (push (javaimp-module-id cur) ids))
 	(setq tmp (javaimp-node-parent tmp))))
     (when need-update
-      (let* ((path (funcall (javaimp-module-dep-jars-path-fetcher module) module))
+      (let* ((path (funcall (javaimp-module-dep-jars-path-fetcher module)
+                            module ids))
              (new-dep-jars (javaimp--split-native-path path))
 	     (new-load-ts (current-time)))
 	(setf (javaimp-module-dep-jars module) new-dep-jars)

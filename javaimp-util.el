@@ -65,10 +65,13 @@
   id parent-id
   file
   file-orig
-  final-name                           ;may be relative (to build-dir)
+  ;; Artifact final name, may be relative to build dir
+  final-name
   source-dirs build-dir
   dep-jars
   load-ts
+  ;; Function to retrieve DEP-JARS for MODULE, called with two
+  ;; arguments: MODULE and list of parent IDs
   dep-jars-path-fetcher
   raw                                   ;used only during parsing
   )

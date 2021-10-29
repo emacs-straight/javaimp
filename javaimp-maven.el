@@ -188,7 +188,7 @@ are somewhat arbitrary."
 		 "pom.xml")
 	 modules)))))
 
-(defun javaimp--maven-fetch-dep-jars-path (module)
+(defun javaimp--maven-fetch-dep-jars-path (module _ids)
   (javaimp--call-build-tool
    javaimp-mvn-program
    (lambda ()
