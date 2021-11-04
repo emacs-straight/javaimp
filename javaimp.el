@@ -38,9 +38,6 @@
 ;;
 ;;   Some details:
 ;;
-;; If Maven/Gradle failed, you can see its output in the buffer named
-;; by `javaimp-debug-buf-name' (default is "*javaimp-debug*").
-;;
 ;; Contents of jar files and Maven/Gradle project structures are
 ;; cached, so usually only the first command should take a
 ;; considerable amount of time to complete.  If a module's build file
@@ -194,6 +191,22 @@ gradlew program, it is used in preference."
     st)
   "Enables parsing angle brackets as lists")
 
+(defconst javaimp--jar-error-header
+  "There were errors when reading some of the dependency files,
+they are listed below.
+
+Note that if you're using java-library plugin in Gradle for any
+modules inside the project tree, then Gradle may avoid creating
+jars for them.  You need to put this into
+$HOME/.gradle/gradle.properties to force that:
+
+systemProp.org.gradle.java.compile-classpath-packaging=true
+
+For more info, see
+https://docs.gradle.org/current/userguide/java_library_plugin.html\
+#sec:java_library_classes_usage
+")
+
 
 ;;;###autoload
 (defun javaimp-visit-project (dir)
@@ -249,7 +262,7 @@ any module file."
 	need-update ids)
     ;; check if deps are initialized
     (unless (javaimp-module-dep-jars module)
-      (message "Loading dependencies: %s" (javaimp-module-id module))
+      (message "Loading dependencies for module: %s" (javaimp-module-id module))
       (setq need-update t))
     ;; check if this or any parent build file has changed since we
     ;; loaded the module
@@ -272,68 +285,65 @@ any module file."
           (push (javaimp-module-id cur) ids))
 	(setq tmp (javaimp-node-parent tmp))))
     (when need-update
-      (let* ((path (funcall (javaimp-module-dep-jars-path-fetcher module)
-                            module ids))
-             (new-dep-jars (javaimp--split-native-path path))
-	     (new-load-ts (current-time)))
-	(setf (javaimp-module-dep-jars module) new-dep-jars)
-	(setf (javaimp-module-load-ts module) new-load-ts)))))
+      (setf (javaimp-module-dep-jars module)
+            (funcall (javaimp-module-dep-jars-fetcher module) module ids))
+      (setf (javaimp-module-load-ts module)
+            (current-time)))))
 
 (defun javaimp--get-jar-classes (file)
-  (let ((cached (cdr (assoc file javaimp-cached-jars))))
-    (cond ((null cached)
-	   ;; create, load & put into cache
-	   (setq cached
-		 (make-javaimp-cached-jar
-		  :file file
-		  :read-ts (javaimp--get-file-ts file)
-		  :classes (javaimp--fetch-jar-classes file)))
-	   (push (cons file cached) javaimp-cached-jars))
-	  ((> (float-time (javaimp--get-file-ts (javaimp-cached-jar-file cached)))
-	      (float-time (javaimp-cached-jar-read-ts cached)))
-	   ;; reload
-	   (setf (javaimp-cached-jar-classes cached) (javaimp--fetch-jar-classes file))
-	   ;; update read-ts
-	   (setf (javaimp-cached-jar-read-ts cached) (current-time))))
-    ;; return from cached
-    (javaimp-cached-jar-classes cached)))
+  (condition-case err
+      (let ((jar (alist-get file javaimp-cached-jars nil nil #'equal)))
+        (when (or (not jar)
+                  ;; If the file doesn't exist this will be current
+                  ;; time, and thus condition always true
+                  (> (float-time (javaimp--get-file-ts file))
+	             (float-time (javaimp-cached-jar-read-ts jar))))
+          (setq jar (make-javaimp-cached-jar
+		     :file file
+		     :read-ts (javaimp--get-file-ts file)
+		     :classes (javaimp--read-jar-classes file))))
+        (setf (alist-get file javaimp-cached-jars) jar)
+        (javaimp-cached-jar-classes jar))
+    (t
+     (setf (alist-get file javaimp-cached-jars nil 'remove #'equal) nil)
+     (signal (car err) (cdr err)))))
 
-(defun javaimp--fetch-jar-classes (file)
+(defun javaimp--read-jar-classes (file)
+  "Read FILE which should be a .jar or a .jmod and return classes
+contained in it as a list."
   (let ((ext (downcase (file-name-extension file))))
     (unless (member ext '("jar" "jmod"))
       (error "Unexpected file name: %s" file))
-    (message "Reading classes in file: %s" file)
-    (with-temp-buffer
-      (let ((coding-system-for-read (when (eq system-type 'cygwin)
-                                      'utf-8-dos)))
-        (process-file
-         (symbol-value (intern (format "javaimp-%s-program" ext)))
-         nil
-         t
-         nil
-         (if (equal ext "jar") "tf" "list")
-         ;; On cygwin, "jar/jmod" is a windows program, so file path
-         ;; needs to be converted appropriately.
-         (javaimp-cygpath-convert-maybe file 'windows)))
-      (goto-char (point-min))
-      (let (result curr)
-	(while (re-search-forward
-                (rx (and bol
-                         (? "classes/") ; prefix output by jmod
-                         (group (+ (any alnum "_/$")))
-                         ".class"
-                         eol))
-                nil t)
-          (setq curr (match-string 1))
-          (unless (or (string-suffix-p "module-info" curr)
-                      (string-suffix-p "package-info" curr)
-                      ;; like Provider$1.class
-                      (string-match-p "\\$[[:digit:]]" curr))
-            (push
-             (string-replace "/" "."
-                             (string-replace "$" "." curr))
-             result)))
-        result))))
+    (let ((javaimp-tool-output-buf-name nil)) ;don't log
+      (javaimp--call-build-tool
+       (symbol-value (intern (format "javaimp-%s-program" ext)))
+       #'javaimp--read-jar-classes-handler
+       (if (equal ext "jar") "tf" "list")
+       ;; On cygwin, "jar/jmod" is a windows program, so file path
+       ;; needs to be converted appropriately.
+       (javaimp-cygpath-convert-maybe file 'windows)))))
+
+(defun javaimp--read-jar-classes-handler ()
+  "Used by `javaimp--read-jar-classes' to handle jar program
+output."
+  (let (result curr)
+    (while (re-search-forward
+            (rx (and bol
+                     (? "classes/")     ; prefix output by jmod
+                     (group (+ (any alnum "_/$")))
+                     ".class"
+                     eol))
+            nil t)
+      (setq curr (match-string 1))
+      (unless (or (string-suffix-p "module-info" curr)
+                  (string-suffix-p "package-info" curr)
+                  ;; like Provider$1.class
+                  (string-match-p "\\$[[:digit:]]" curr))
+        (push
+         (string-replace "/" "."
+                         (string-replace "$" "." curr))
+         result)))
+    result))
 
 
 ;; Some API functions
@@ -404,13 +414,25 @@ current `symbol-at-point'."
             ;; module dependencies
             (when module
 	      ;; We're not caching full list of classes coming from
-	      ;; module dependencies because jars may change and we
-	      ;; need to reload them
-	      (apply #'append
-		     (mapcar #'javaimp--get-jar-classes
-                             (javaimp-module-dep-jars module))))
+	      ;; module dependencies because jars may change
+              (let (jar-errors)
+                (prog1
+                    (seq-mapcat (lambda (jar)
+                                  (condition-case err
+                                      (javaimp--get-jar-classes jar)
+                                    (t
+                                     (push (error-message-string err) jar-errors)
+                                     nil)))
+                                (javaimp-module-dep-jars module))
+                  (when jar-errors
+                    (with-output-to-temp-buffer "*Javaimp Jar errors*"
+                      (princ javaimp--jar-error-header)
+                      (terpri)
+                      (dolist (err (nreverse jar-errors))
+                        (princ err)
+                        (terpri)))))))
             ;; current module or source tree
-            (when javaimp-enable-parsing
+            (when (and module javaimp-enable-parsing)
               (seq-mapcat #'javaimp--get-directory-classes
                           (javaimp--get-current-source-dirs module)))
             ))
@@ -437,12 +459,12 @@ current `symbol-at-point'."
         ;; pre-jdk9
         (setq dir (mapconcat #'file-name-as-directory
                              `(,javaimp-java-home "jre" "lib") nil))
-        (message "jmods directory not found, fallback to reading jars from \"%s\"" dir)
+        (message "jmods directory not found, reading jars from \"%s\"" dir)
         (if (file-directory-p dir)
             (apply #'append
 	           (mapcar #'javaimp--get-jar-classes
                            (directory-files dir t "\\.jar\\'")))
-          (user-error "JRE lib dir \"%s\" doesn't exist" dir))))))
+          (user-error "jre/lib dir \"%s\" doesn't exist" dir))))))
 
 (defun javaimp--get-current-source-dirs (module)
   "Return list of source directories to check for Java files."
@@ -584,13 +606,12 @@ is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
 	 ;; if there were any imports, we start inserting at the same place
 	 (goto-char start))
 	((re-search-forward "^\\s *package\\s " nil t)
-	 ;; if there's a package directive, insert one blank line below and
-	 ;; leave point after it
+	 ;; if there's a package directive, insert one blank line
+	 ;; below it
 	 (end-of-line)
 	 (if (eobp)
 	     (insert ?\n)
 	   (forward-line))
-	 ;; then insert one blank line and we're done
 	 (insert ?\n))
 	(t
 	 ;; otherwise, just go to bob

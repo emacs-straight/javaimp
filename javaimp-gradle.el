@@ -87,7 +87,7 @@ descriptor."
                 (cdr (assq 'build-dir alist))))
    :dep-jars (javaimp--split-native-path (cdr (assq 'dep-jars alist)))
    :load-ts (current-time)
-   :dep-jars-path-fetcher #'javaimp--gradle-fetch-dep-jars-path
+   :dep-jars-fetcher #'javaimp--gradle-fetch-dep-jars
    :raw nil))
 
 (defun javaimp--gradle-id-from-semi-separated (str)
@@ -106,7 +106,7 @@ descriptor."
                        :artifact artifact
                        :version (nth 2 parts)))))
 
-(defun javaimp--gradle-fetch-dep-jars-path (module ids)
+(defun javaimp--gradle-fetch-dep-jars (module ids)
   (javaimp--gradle-call
    ;; Always invoke on orig file (which is root build script)
    ;; because module's own file may not exist, even if reported by
@@ -114,13 +114,20 @@ descriptor."
    (javaimp-module-file-orig module)
    (lambda ()
      (re-search-forward "^dep-jars=\\(.*\\)$")
-     (match-string 1))
+     (javaimp--split-native-path (match-string 1)))
    (let ((mod-path (mapconcat #'javaimp-id-artifact (cdr ids) ":")))
      (unless (string-empty-p mod-path)
        (format ":%s:" mod-path)))))
 
 (defun javaimp--gradle-call (file handler &optional mod-path)
-  (let* ((local-gradlew (concat (file-name-directory file) "gradlew"))
+  (let* (;; There is (was) "-b" switch for specifying build file,
+         ;; however it became deprecated in Gradle 7, so we try to run
+         ;; in build file directory.
+         (default-directory (file-name-directory file))
+         ;; Prefer local gradle wrapper
+         (local-gradlew (if (memq system-type '(cygwin windows-nt))
+                            "gradlew.bat"
+                          "gradlew"))
          (gradlew (if (file-exists-p local-gradlew)
                       local-gradlew
                     javaimp-gradle-program)))
@@ -128,11 +135,6 @@ descriptor."
      gradlew
      handler
      "-q"
-     ;; It's easier for us to track jars instead of classes for java-library
-     ;; projects.  See
-     ;; https://docs.gradle.org/current/userguide/java_library_plugin.html#sec:java_library_classes_usage
-     "-Dorg.gradle.java.compile-classpath-packaging=true"
-     "-b" (javaimp-cygpath-convert-maybe file)
      "-I" (javaimp-cygpath-convert-maybe
            (expand-file-name "javaimp-init-script.gradle"
                              javaimp--basedir))

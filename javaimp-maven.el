@@ -128,7 +128,7 @@ resulting module trees."
 		  (javaimp--xml-first-child (javaimp--xml-child 'directory build-elt))))
      :dep-jars nil          ; dep-jars is initialized lazily on demand
      :load-ts (current-time)
-     :dep-jars-path-fetcher #'javaimp--maven-fetch-dep-jars-path
+     :dep-jars-fetcher #'javaimp--maven-fetch-dep-jars
      :raw elt)))
 
 (defun javaimp--maven-id-from-xml (elt)
@@ -188,14 +188,14 @@ are somewhat arbitrary."
 		 "pom.xml")
 	 modules)))))
 
-(defun javaimp--maven-fetch-dep-jars-path (module _ids)
+(defun javaimp--maven-fetch-dep-jars (module _ids)
   (javaimp--call-build-tool
    javaimp-mvn-program
    (lambda ()
      (goto-char (point-min))
      (search-forward "Dependencies classpath:")
      (forward-line 1)
-     (thing-at-point 'line))
+     (javaimp--split-native-path (thing-at-point 'line)))
    ;; always invoke for this module's pom.ml
    "-f" (javaimp-cygpath-convert-maybe
          (javaimp-module-file module))

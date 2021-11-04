@@ -25,8 +25,6 @@
 (require 'cl-lib)
 (require 'seq)
 
-(defconst javaimp-debug-buf-name "*javaimp-debug*")
-
 (defconst javaimp--basedir (file-name-directory load-file-name))
 
 (defconst javaimp--classlike-scope-types
@@ -54,6 +52,10 @@
     (interface . "in")
     (enum . "en")))
 
+(defvar javaimp-tool-output-buf-name "*javaimp-tool-output*"
+  "Name of the buffer to which `javaimp--call-build-tool' copies
+build tool output.  Can be let-bound to nil to suppress copying.")
+
 
 
 ;; Structs
@@ -71,8 +73,9 @@
   dep-jars
   load-ts
   ;; Function to retrieve DEP-JARS for MODULE, called with two
-  ;; arguments: MODULE and list of parent IDs
-  dep-jars-path-fetcher
+  ;; arguments: MODULE and list of parent IDs.  Should return a list
+  ;; of strings - jar file names.
+  dep-jars-fetcher
   raw                                   ;used only during parsing
   )
 
@@ -281,20 +284,29 @@ unchanged."
     path))
 
 (defun javaimp--call-build-tool (program handler &rest args)
-  "Runs PROGRAM with ARGS, then calls HANDLER in the temporary
-buffer and returns its result"
-  (message "Calling %s on args: %s" program args)
+  "Run PROGRAM with ARGS, then call HANDLER in the temporary buffer
+with point set to eob and return its result."
+  (message "Calling program: %s %s" program (string-join args " "))
   (with-temp-buffer
-    (let ((status (let ((coding-system-for-read
-                         (if (eq system-type 'cygwin) 'utf-8-dos)))
-                    ;; TODO check  in output on Gnu/Linux
-                    (apply #'process-file program nil t nil args)))
+    (let ((status
+           (let ((coding-system-for-read
+                  (when (eq system-type 'cygwin) 'utf-8-dos))
+                 (process-environment
+                  (cons (format "JAVA_HOME=%s" javaimp-java-home)
+                        process-environment)))
+             (apply #'process-file program nil t nil args)))
 	  (buf (current-buffer)))
-      (with-current-buffer (get-buffer-create javaimp-debug-buf-name)
-	(erase-buffer)
-	(insert-buffer-substring buf))
-      (or (and (numberp status) (= status 0))
-	  (error "\"%s\" failed with status \"%s\"" program status))
+      (when javaimp-tool-output-buf-name
+        (with-current-buffer (get-buffer-create
+                              javaimp-tool-output-buf-name)
+          (setq buffer-read-only nil)
+	  (erase-buffer)
+	  (insert-buffer-substring buf)
+          (setq buffer-read-only t)))
+      (unless (and (numberp status) (= status 0))
+        (when javaimp-tool-output-buf-name
+          (display-buffer javaimp-tool-output-buf-name))
+	(error "%s exit status: %s" program status))
       (goto-char (point-min))
       (funcall handler))))
 
