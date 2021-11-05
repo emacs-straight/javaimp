@@ -29,10 +29,9 @@ reads project structure from the output and records which files
 belong to which modules and other module information.  Returns
 resulting module trees."
   (message "Visiting Maven POM file %s..." file)
-  (let* ((xml-tree (javaimp--call-build-tool
-                    javaimp-mvn-program
+  (let* ((xml-tree (javaimp--maven-call
+                    file
                     #'javaimp--maven-effective-pom-handler
-                    "-f" (javaimp-cygpath-convert-maybe file)
                     "help:effective-pom"))
 	 (projects (or (if (assq 'project xml-tree)
                            (list (assq 'project xml-tree))
@@ -189,16 +188,31 @@ are somewhat arbitrary."
 	 modules)))))
 
 (defun javaimp--maven-fetch-dep-jars (module _ids)
-  (javaimp--call-build-tool
-   javaimp-mvn-program
+  (javaimp--maven-call
+   ;; always invoke for this module's pom.xml
+   (javaimp-module-file module)
    (lambda ()
-     (goto-char (point-min))
      (search-forward "Dependencies classpath:")
      (forward-line 1)
      (javaimp--split-native-path (thing-at-point 'line)))
-   ;; always invoke for this module's pom.ml
-   "-f" (javaimp-cygpath-convert-maybe
-         (javaimp-module-file module))
-   "dependency:build-classpath"))
+   "dependency:build-classpath"
+   ;; Invoke in original file's directory because there may be local
+   ;; build tool wrapper.
+   (file-name-directory (javaimp-module-file-orig module))))
+
+(defun javaimp--maven-call (file handler task &optional dir)
+  (let* ((default-directory (or dir (file-name-directory file)))
+         ;; Prefer local mvn wrapper
+         (local-mvnw (if (memq system-type '(cygwin windows-nt))
+                         "mvnw.cmd"
+                       "mvnw"))
+         (program (if (file-exists-p local-mvnw)
+                      (concat default-directory local-mvnw)
+                    javaimp-mvn-program)))
+    (javaimp--call-build-tool
+     program
+     handler
+     "-f" (javaimp-cygpath-convert-maybe file)
+     task)))
 
 (provide 'javaimp-maven)

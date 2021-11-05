@@ -105,7 +105,10 @@ The order of classes which were not matched is defined by
 `javaimp-import-group-alist'"
   :type 'integer)
 
-(defcustom javaimp-java-home (getenv "JAVA_HOME")
+(defcustom javaimp-java-home
+  (let ((val (getenv "JAVA_HOME")))
+    (and val (not (string-blank-p val))
+         val))
   "Path to the JDK.  Should contain subdirectory
 \"jre/lib\" (pre-JDK9) or just \"lib\".  By default, it is
 initialized from the JAVA_HOME environment variable."
@@ -368,30 +371,22 @@ PREDICATE returns non-nil."
 
 ;;;###autoload
 (defun javaimp-add-import (classname)
-  "Imports classname in the current file by asking for input (with
-completion) and calling `javaimp-organize-imports'.
+  "Import CLASSNAME in the current buffer and call `javaimp-organize-imports'.
+Interactively, provide completion alternatives relevant for this
+file, additionally filtering them by matching simple class name
+with `symbol-at-point' (with prefix arg - just offer full set).
 
-Completion alternatives are constructed as follows:
+The set of relevant classes is collected from the following:
 
-- If `javaimp-java-home' is set then add JDK classes.  lib-dir is
-\"jre/lib\" or \"lib\" subdirectory.  First, attempt to read jmod
-files in \"lib-dir/jmods\" subdirectory.  If there's no jmods
-subdirectory - fallback to reading all jar files in lib-dir, this
-is for pre-jdk9 versions of java.
+- If `javaimp-java-home' is set then add JDK classes, see
+`javaimp--get-jdk-classes'.
 
 - If current module can be determined, then add all classes from
 its dependencies.
 
-- If `javaimp-enable-parsing' is non-nil, also add current
-module's classes.  If there's no current module, then add all
-classes from the current file tree: if there's a \"package\"
-directive in the current file and it matches last components of
-the file name, then file tree starts in the parent directory of
-the package, otherwise just use current directory.
-
-- If no prefix arg is given, keep only candidates whose class
-simple name (last component of a fully-qualified name) matches
-current `symbol-at-point'."
+- If `javaimp-enable-parsing' is non-nil, also add classes in
+current module or source tree, see
+`javaimp--get-current-source-dirs'."
   (interactive
    (let* ((file (expand-file-name (or buffer-file-name
 				      (error "Buffer is not visiting a file!"))))
@@ -404,38 +399,20 @@ current `symbol-at-point'."
           (module (when node
                     (javaimp--update-module-maybe node)
                     (javaimp-node-contents node)))
-          (classes
-           (append
-            ;; jdk
-            (progn
-              (when (eq javaimp--jdk-classes 'need-init)
-                (setq javaimp--jdk-classes (javaimp--get-jdk-classes)))
-              javaimp--jdk-classes)
-            ;; module dependencies
-            (when module
-	      ;; We're not caching full list of classes coming from
-	      ;; module dependencies because jars may change
-              (let (jar-errors)
-                (prog1
-                    (seq-mapcat (lambda (jar)
-                                  (condition-case err
-                                      (javaimp--get-jar-classes jar)
-                                    (t
-                                     (push (error-message-string err) jar-errors)
-                                     nil)))
-                                (javaimp-module-dep-jars module))
-                  (when jar-errors
-                    (with-output-to-temp-buffer "*Javaimp Jar errors*"
-                      (princ javaimp--jar-error-header)
-                      (terpri)
-                      (dolist (err (nreverse jar-errors))
-                        (princ err)
-                        (terpri)))))))
-            ;; current module or source tree
-            (when (and module javaimp-enable-parsing)
-              (seq-mapcat #'javaimp--get-directory-classes
-                          (javaimp--get-current-source-dirs module)))
-            ))
+          (classes (append
+                    ;; jdk
+                    (when javaimp-java-home
+                      (when (eq javaimp--jdk-classes 'need-init)
+                        (setq javaimp--jdk-classes
+                              (javaimp--get-jdk-classes javaimp-java-home)))
+                      javaimp--jdk-classes)
+                    ;; module dependencies
+                    (when module
+                      (javaimp--get-module-deps-classes module))
+                    ;; current module or source tree
+                    (when javaimp-enable-parsing
+                      (seq-mapcat #'javaimp--get-directory-classes
+                                  (javaimp--get-current-source-dirs module)))))
           (completion-regexp-list
            (and (not current-prefix-arg)
                 (symbol-at-point)
@@ -446,28 +423,50 @@ current `symbol-at-point'."
                             (symbol-name (symbol-at-point))))))
   (javaimp-organize-imports (cons classname 'ordinary)))
 
-(defun javaimp--get-jdk-classes ()
-  (when javaimp-java-home
-    (unless (file-accessible-directory-p javaimp-java-home)
-      (user-error "Java home directory \"%s\" is not accessible" javaimp-java-home))
-    (let ((dir (concat (file-name-as-directory javaimp-java-home) "jmods")))
+(defun javaimp--get-jdk-classes (java-home)
+  "If 'jmods' subdirectory exists in JAVA-HOME (Java 9+), read all
+.jmod files in it.  Else, if 'jre/lib' subdirectory exists in
+JAVA-HOME (earlier Java versions), read all .jar files in it."
+  (let ((dir (concat (file-name-as-directory java-home) "jmods")))
+    (if (file-directory-p dir)
+        (seq-mapcat #'javaimp--get-jar-classes
+                    (directory-files dir t "\\.jmod\\'"))
+      (setq dir (mapconcat #'file-name-as-directory
+                           `(,java-home "jre" "lib") nil))
       (if (file-directory-p dir)
-          ;; java9 and later contain modules, scan them
-          (apply #'append
-	         (mapcar #'javaimp--get-jar-classes
-                         (directory-files dir t "\\.jmod\\'")))
-        ;; pre-jdk9
-        (setq dir (mapconcat #'file-name-as-directory
-                             `(,javaimp-java-home "jre" "lib") nil))
-        (message "jmods directory not found, reading jars from \"%s\"" dir)
-        (if (file-directory-p dir)
-            (apply #'append
-	           (mapcar #'javaimp--get-jar-classes
-                           (directory-files dir t "\\.jar\\'")))
-          (user-error "jre/lib dir \"%s\" doesn't exist" dir))))))
+          (seq-mapcat #'javaimp--get-jar-classes
+                      (directory-files dir t "\\.jar\\'"))
+        (user-error "Could not load JDK classes")))))
+
+(defun javaimp--get-module-deps-classes (module)
+  ;; We're not caching full list of classes coming from
+  ;; module dependencies because jars may change
+  (let (jar-errors)
+    (prog1
+        (seq-mapcat
+         (lambda (jar)
+           (condition-case err
+               (javaimp--get-jar-classes jar)
+             (t
+              (push (concat jar ": " (error-message-string err))
+                    jar-errors)
+              nil)))
+         (javaimp-module-dep-jars module))
+      (when jar-errors
+        (with-output-to-temp-buffer "*Javaimp Jar errors*"
+          (princ javaimp--jar-error-header)
+          (terpri)
+          (dolist (err (nreverse jar-errors))
+            (princ err)
+            (terpri)))))))
 
 (defun javaimp--get-current-source-dirs (module)
-  "Return list of source directories to check for Java files."
+  "Return list of source directories for inspection for Java
+sources.  If MODULE is non-nil then result is module source dirs
+and additional source dirs.  Otherwise, try to determine the root
+of source tree from 'package' directive in the current buffer.
+If there's no such directive, then the last resort is just
+`default-directory'."
   (if module
       (append
        (javaimp-module-source-dirs module)
@@ -499,12 +498,12 @@ current `symbol-at-point'."
         (save-excursion
           (save-restriction
             (widen)
-            (javaimp--get-classes))))
+            (javaimp--get-buffer-classes))))
     (with-temp-buffer
       (insert-file-contents file)
-      (javaimp--get-classes))))
+      (javaimp--get-buffer-classes))))
 
-(defun javaimp--get-classes ()
+(defun javaimp--get-buffer-classes ()
   "Return fully-qualified names of all class-like scopes."
   (let ((package (javaimp--parse-get-package))
         (scopes (javaimp--parse-get-all-scopes
@@ -804,7 +803,7 @@ start (`javaimp-scope-start') instead."
 ;; Misc
 
 (defun javaimp-reset (arg)
-  "Forget loaded trees state.  With prefix arg, also reset jars
+  "Forget current state.  With prefix arg, also reset jars
 cache."
   (interactive "P")
   (setq javaimp-project-forest nil

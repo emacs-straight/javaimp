@@ -108,9 +108,10 @@ descriptor."
 
 (defun javaimp--gradle-fetch-dep-jars (module ids)
   (javaimp--gradle-call
-   ;; Always invoke on orig file (which is root build script)
-   ;; because module's own file may not exist, even if reported by
-   ;; Gradle as project.buildFile
+   ;; Always invoke on orig file (which is root build script) because
+   ;; module's own file may not exist, even if reported by Gradle as
+   ;; project.buildFile.  Furthermore, we use that file's directory to
+   ;; determine for local build tool wrappers.
    (javaimp-module-file-orig module)
    (lambda ()
      (re-search-forward "^dep-jars=\\(.*\\)$")
@@ -128,16 +129,21 @@ descriptor."
          (local-gradlew (if (memq system-type '(cygwin windows-nt))
                             "gradlew.bat"
                           "gradlew"))
-         (gradlew (if (file-exists-p local-gradlew)
-                      local-gradlew
+         (program (if (file-exists-p local-gradlew)
+                      (concat default-directory local-gradlew)
                     javaimp-gradle-program)))
     (javaimp--call-build-tool
-     gradlew
+     program
      handler
      "-q"
+     ;; It's easier for us to track jars instead of classes for
+     ;; java-library projects.  See
+     ;; https://docs.gradle.org/current/userguide/java_library_plugin.html#sec:java_library_classes_usage
+     "-Dorg.gradle.java.compile-classpath-packaging=true"
      "-I" (javaimp-cygpath-convert-maybe
            (expand-file-name "javaimp-init-script.gradle"
-                             javaimp--basedir))
+                             (concat javaimp--basedir
+                                     (file-name-as-directory "support"))))
      (concat mod-path "javaimpTask"))))
 
 (provide 'javaimp-gradle)

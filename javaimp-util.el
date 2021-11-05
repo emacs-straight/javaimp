@@ -286,14 +286,16 @@ unchanged."
 (defun javaimp--call-build-tool (program handler &rest args)
   "Run PROGRAM with ARGS, then call HANDLER in the temporary buffer
 with point set to eob and return its result."
-  (message "Calling program: %s %s" program (string-join args " "))
+  (message "Calling: %s %s" program (string-join args " "))
   (with-temp-buffer
     (let ((status
            (let ((coding-system-for-read
                   (when (eq system-type 'cygwin) 'utf-8-dos))
                  (process-environment
-                  (cons (format "JAVA_HOME=%s" javaimp-java-home)
-                        process-environment)))
+                  (if javaimp-java-home
+                      (cons (format "JAVA_HOME=%s" javaimp-java-home)
+                            process-environment)
+                    process-environment)))
              (apply #'process-file program nil t nil args)))
 	  (buf (current-buffer)))
       (when javaimp-tool-output-buf-name
