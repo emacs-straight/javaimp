@@ -8,6 +8,11 @@
 (require 'ert)
 (require 'javaimp)
 
+;; Use this selector to run all tests which do not invoke build tool:
+;;
+;; (and "^javaimp-" (not (tag :runs-build-tool)))
+;;
+
 ;; Tests for low-level helpers of scope parsers.
 
 (ert-deftest javaimp-test--parse-arglist ()
@@ -279,13 +284,13 @@ package commented.block;
 
 
 
-;; Tests for javaimp--get-classes
+;; Tests for javaimp--get-buffer-classes
 
-(ert-deftest javaimp-test--get-classes ()
+(ert-deftest javaimp-test--get-buffer-classes ()
   (with-temp-buffer
     (insert-file-contents
      (concat javaimp--basedir "testdata/test1-misc-classes.java"))
-    (should (equal (javaimp--get-classes)
+    (should (equal (javaimp--get-buffer-classes)
                    '("org.foo.Top"
                      "org.foo.Top.CInner1"
                      "org.foo.Top.CInner1.CInner1_CInner1"
