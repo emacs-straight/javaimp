@@ -37,8 +37,7 @@
      method
      simple-statement
      statement
-     array
-     unknown)
+     array)
    javaimp--classlike-scope-types))
 
 (defconst javaimp--help-scope-type-abbrevs
@@ -46,7 +45,6 @@
     (statement . "st")
     (simple-statement . "ss")
     (array . "ar")
-    (unknown . "un")
     (method . "me")
     (class . "cl")
     (interface . "in")

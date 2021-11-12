@@ -201,7 +201,6 @@ is unchanged."
     javaimp--parse-scope-class
     javaimp--parse-scope-simple-stmt
     javaimp--parse-scope-method-or-stmt
-    javaimp--parse-scope-unknown
     )
   "List of parser functions, each of which is called with BRACE-POS,
 the position of opening brace.")
@@ -322,13 +321,6 @@ the position of opening brace.")
                              :start nil
                              :open-brace brace-pos))))
 
-(defun javaimp--parse-scope-unknown (brace-pos)
-  "Catch-all parser which produces 'unknown' scope."
-  (make-javaimp-scope :type 'unknown
-                      :name "unknown"
-                      :start nil
-                      :open-brace brace-pos))
-
 (defun javaimp--parse-scopes (count)
   "Attempts to parse COUNT enclosing scopes at point.  Returns most
 nested one, with its parents sets accordingly.  If COUNT is nil
@@ -345,13 +337,15 @@ then goes all the way up.  Examines and sets property
         (when (= (char-after) ?{)
           (let ((scope (get-text-property (point) 'javaimp-parse-scope)))
             (unless scope
-              (setq scope (run-hook-with-args-until-success
-                           'javaimp--parse-scope-hook (nth 1 state)))
+              (setq scope (or (run-hook-with-args-until-success
+                               'javaimp--parse-scope-hook (nth 1 state))
+                              'unknown))
               (put-text-property (point) (1+ (point))
                                  'javaimp-parse-scope scope))
-            (push scope res)
-            (if (javaimp-scope-start scope)
-                (goto-char (javaimp-scope-start scope)))))
+            (when (javaimp-scope-p scope)
+              (push scope res)
+              (if (javaimp-scope-start scope)
+                  (goto-char (javaimp-scope-start scope))))))
         (setq state (syntax-ppss))))
     (let (parent)
       (while res
@@ -459,7 +453,7 @@ them should move point."
         scope res)
     (while (setq pos (previous-single-property-change pos 'javaimp-parse-scope))
       (setq scope (get-text-property pos 'javaimp-parse-scope))
-      (when (and scope
+      (when (and (javaimp-scope-p scope)
                  (or (null pred)
                      (funcall pred scope)))
         (setq scope (javaimp--copy-scope scope))

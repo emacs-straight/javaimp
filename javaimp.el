@@ -173,6 +173,12 @@ gradlew program, it is used in preference."
 
 ;; Variables
 
+(defvar javaimp-handler-regexp-alist
+  `(("\\`build.gradle" . ,#'javaimp--gradle-visit)
+    ("\\`pom.xml\\'" . ,#'javaimp--maven-visit))
+  "Alist of file name patterns vs corresponding handler function.
+A handler function takes one argument, a FILE.")
+
 (defvar javaimp-project-forest nil
   "Visited projects")
 
@@ -212,50 +218,53 @@ https://docs.gradle.org/current/userguide/java_library_plugin.html\
 
 
 ;;;###autoload
-(defun javaimp-visit-project (dir)
-  "Loads a project and its submodules.  DIR should point to a
-directory containing pom.xml / build.gradle[.kts].
+(defun javaimp-visit-project (file)
+  "Loads a project and its submodules from FILE.
+FILE should have a handler as per `javaimp-handler-regexp-alist'.
+Interactively, finds suitable files in this directory and parent
+directories, and offers them as completion alternatives for FILE,
+topmost first.
 
 After being processed by this command, the module tree becomes
 known to javaimp and `javaimp-add-import' may be called inside
-any module file."
-  (interactive "DVisit Gradle or Maven project in directory: ")
-  (setq dir (file-name-as-directory (expand-file-name dir)))
-  (if-let ((build-file
-            (seq-find #'file-exists-p
-                      (mapcar (lambda (f)
-                                (concat dir f))
-                              '("build.gradle" "build.gradle.kts"
-                                "pom.xml")))))
-      (progn
-        ;; Forget previous tree(s) loaded from this build file, if
-        ;; any.  Additional project trees (see below) have the same
-        ;; file-orig, so there may be several here.
-        (when-let ((existing-list
-                    (seq-filter (lambda (node)
-                                  (equal (javaimp-module-file-orig
-                                          (javaimp-node-contents node))
-	                                 build-file))
-                                javaimp-project-forest)))
-          (if (y-or-n-p "Forget already loaded project(s)?")
-              (setq javaimp-project-forest
-                    (seq-remove (lambda (node)
-                                  (memq node existing-list))
-                                javaimp-project-forest))
-            (user-error "Aborted")))
-        (let ((trees (funcall (if (string-match
-                                   "gradle" (file-name-nondirectory build-file))
-                                  #'javaimp--gradle-visit
-                                #'javaimp--maven-visit)
-                              build-file)))
-          (push (car trees) javaimp-project-forest)
-          (dolist (node (cdr trees))
-            (when (y-or-n-p
-                   (format "Include additional project tree rooted at %S?"
-                           (javaimp-module-id (javaimp-node-contents node))))
-              (push node javaimp-project-forest)))
-          (message "Loaded tree for %s" dir)))
-    (error "Could not find build file in directory %s" dir)))
+any module's source file."
+  (interactive
+   (let ((file-regexp (mapconcat #'car javaimp-handler-regexp-alist "\\|"))
+         (cur-dir (expand-file-name default-directory))
+         files parent)
+     (while (setq files (append (directory-files cur-dir t file-regexp) files)
+                  ;; Prevent infloop on root
+                  parent (file-name-directory (directory-file-name cur-dir))
+                  cur-dir (unless (string= parent cur-dir) parent)))
+     (list (read-file-name "Visit project from file: " nil files t))))
+  (setq file (expand-file-name file))
+  (let ((handler (or (assoc-default (file-name-nondirectory file)
+                                    javaimp-handler-regexp-alist
+                                    #'string-match)
+                     (user-error "No handler for file: %s" file))))
+    ;; Forget previous tree(s) loaded from this build file, if any.
+    ;; Additional project trees (see below) have the same file-orig,
+    ;; so there may be several here.
+    (when-let ((existing-list
+                (seq-filter (lambda (node)
+                              (equal (javaimp-module-file-orig
+                                      (javaimp-node-contents node))
+	                             file))
+                            javaimp-project-forest)))
+      (if (y-or-n-p "Forget already loaded project(s)?")
+          (setq javaimp-project-forest
+                (seq-remove (lambda (node)
+                              (memq node existing-list))
+                            javaimp-project-forest))
+        (user-error "Aborted")))
+    (let ((trees (funcall handler file)))
+      (push (car trees) javaimp-project-forest)
+      (dolist (node (cdr trees))
+        (when (y-or-n-p
+               (format "Include additional project tree rooted at %S?"
+                       (javaimp-module-id (javaimp-node-contents node))))
+          (push node javaimp-project-forest)))
+      (message "Loaded project from %s" file))))
 
 
 ;; Dependency jars
@@ -501,7 +510,10 @@ If there's no such directive, then the last resort is just
             (javaimp--get-buffer-classes))))
     (with-temp-buffer
       (insert-file-contents file)
-      (javaimp--get-buffer-classes))))
+      ;; We need only class-likes, and this is temp buffer, so for
+      ;; efficiency avoid parsing anything else
+      (let ((javaimp--parse-scope-hook #'javaimp--parse-scope-class))
+        (javaimp--get-buffer-classes)))))
 
 (defun javaimp--get-buffer-classes ()
   "Return fully-qualified names of all class-like scopes."
