@@ -132,16 +132,6 @@ Custom values set in plugin configuration in pom.xml are not
 supported yet."
   :type '(repeat (string :tag "Relative directory")))
 
-(defcustom javaimp-jar-program "jar"
-  "Path to the `jar' program used to read contents of jar files.
-Customize it if the program is not on `exec-path'."
-  :type 'string)
-
-(defcustom javaimp-jmod-program "jmod"
-  "Path to the `jmod' program used to read contents of jmod files.
-Customize it if the program is not on `exec-path'."
-  :type 'string)
-
 (defcustom javaimp-enable-parsing t
   "If non-nil, javaimp will try to parse current module's source
 files to determine completion alternatives, in addition to those
@@ -153,22 +143,34 @@ from module dependencies."
 class)."
   :type 'boolean)
 
+(defcustom javaimp-verbose nil
+  "If non-nil, be verbose."
+  :type 'boolean)
+
+
+(defcustom javaimp-jar-program "jar"
+  "Path to the `jar' program used to read contents of jar files."
+  :type 'string)
+
+(defcustom javaimp-jmod-program "jmod"
+  "Path to the `jmod' program used to read contents of jmod files."
+  :type 'string)
+
 (defcustom javaimp-cygpath-program
   (if (eq system-type 'cygwin) "cygpath")
-  "Path to the `cygpath' program (Cygwin only).  Customize it if
-the program is not on `exec-path'."
+  "Path to the `cygpath' program (Cygwin only)."
   :type 'string)
 
 (defcustom javaimp-mvn-program "mvn"
-  "Path to the `mvn' program.  Customize it if the program is not
-on `exec-path'."
+  "Path to the `mvn' program.  If the visited project has local
+mvnw (Maven wrapper), it is used in preference."
   :type 'string)
 
 (defcustom javaimp-gradle-program "gradle"
-  "Path to the `gradle' program.  Customize it if the program is
-not on `exec-path'.  If the visited project's directory contains
-gradlew program, it is used in preference."
+  "Path to the `gradle' program.  If the visited project has local
+gradlew (Gradle wrapper), it is used in preference."
   :type 'string)
+
 
 
 ;; Variables
@@ -182,11 +184,9 @@ A handler function takes one argument, a FILE.")
 (defvar javaimp-project-forest nil
   "Visited projects")
 
-(defvar javaimp-cached-jars nil
-  "Alist of cached jars.  Each element is of the form (FILE
-  . CACHED-JAR).")
-
-(defvar javaimp--jdk-classes 'need-init)
+(defvar javaimp-jar-cache nil
+  "Jar cache, an alist of (FILE . JAR), where FILE is expanded
+file name and JAR is javaimp-cached-jar struct.")
 
 (defvar javaimp-syntax-table
   (make-syntax-table java-mode-syntax-table) ;TODO don't depend
@@ -304,7 +304,7 @@ any module's source file."
 
 (defun javaimp--get-jar-classes (file)
   (condition-case err
-      (let ((jar (alist-get file javaimp-cached-jars nil nil #'equal)))
+      (let ((jar (alist-get file javaimp-jar-cache nil nil #'equal)))
         (when (or (not jar)
                   ;; If the file doesn't exist this will be current
                   ;; time, and thus condition always true
@@ -314,10 +314,10 @@ any module's source file."
 		     :file file
 		     :read-ts (javaimp--get-file-ts file)
 		     :classes (javaimp--read-jar-classes file))))
-        (setf (alist-get file javaimp-cached-jars) jar)
+        (setf (alist-get file javaimp-jar-cache) jar)
         (javaimp-cached-jar-classes jar))
     (t
-     (setf (alist-get file javaimp-cached-jars nil 'remove #'equal) nil)
+     (setf (alist-get file javaimp-jar-cache nil 'remove #'equal) nil)
      (signal (car err) (cdr err)))))
 
 (defun javaimp--read-jar-classes (file)
@@ -411,10 +411,7 @@ current module or source tree, see
           (classes (append
                     ;; jdk
                     (when javaimp-java-home
-                      (when (eq javaimp--jdk-classes 'need-init)
-                        (setq javaimp--jdk-classes
-                              (javaimp--get-jdk-classes javaimp-java-home)))
-                      javaimp--jdk-classes)
+                      (javaimp--get-jdk-classes javaimp-java-home))
                     ;; module dependencies
                     (when module
                       (javaimp--get-module-deps-classes module))
@@ -496,6 +493,8 @@ If there's no such directive, then the last resort is just
 
 (defun javaimp--get-directory-classes (dir)
   (when (file-accessible-directory-p dir)
+    (when javaimp-verbose
+      (message "Parsing files in %s..." dir))
     (seq-mapcat #'javaimp--get-file-classes
                 (seq-filter (lambda (file)
                               (not (file-symlink-p file)))
@@ -814,14 +813,10 @@ start (`javaimp-scope-start') instead."
 
 ;; Misc
 
-(defun javaimp-reset (arg)
-  "Forget current state.  With prefix arg, also reset jars
-cache."
-  (interactive "P")
-  (setq javaimp-project-forest nil
-        javaimp--jdk-classes 'need-init)
-  (when arg
-    (setq javaimp-cached-jars nil)))
+(defun javaimp-forget-all-cached ()
+  "Forget all cached data."
+  (setq javaimp-jar-cache nil))
+
 
 (provide 'javaimp)
 
