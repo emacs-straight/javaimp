@@ -325,7 +325,11 @@ the position of opening brace.")
   "Attempts to parse COUNT enclosing scopes at point.  Returns most
 nested one, with its parents sets accordingly.  If COUNT is nil
 then goes all the way up.  Examines and sets property
-'javaimp-parse-scope' at each scope's open brace."
+'javaimp-parse-scope' at each scope's open brace.  If neither of
+functions in `javaimp--parse-scope-hook' return non-nil then the
+property value is set to the symbol `unknown'.  Additionally, if
+a scope is recognized, but any of its parents is 'unknown', then
+it's set to 'unknown' too."
   (let ((state (syntax-ppss))
         res)
     (unless (syntax-ppss-context state)
@@ -338,19 +342,28 @@ then goes all the way up.  Examines and sets property
           (let ((scope (get-text-property (point) 'javaimp-parse-scope)))
             (unless scope
               (setq scope (or (run-hook-with-args-until-success
-                               'javaimp--parse-scope-hook (nth 1 state))
+                               'javaimp--parse-scope-hook (point))
                               'unknown))
               (put-text-property (point) (1+ (point))
                                  'javaimp-parse-scope scope))
-            (when (javaimp-scope-p scope)
-              (push scope res)
-              (if (javaimp-scope-start scope)
-                  (goto-char (javaimp-scope-start scope))))))
+            (push scope res)
+            (when (and (javaimp-scope-p scope)
+                       (javaimp-scope-start scope))
+              (goto-char (javaimp-scope-start scope)))))
         (setq state (syntax-ppss))))
-    (let (parent)
+    (let (parent reset-tail)
       (while res
-        (setf (javaimp-scope-parent (car res)) parent)
-        (setq parent (car res))
+        (if reset-tail
+            (when (javaimp-scope-p (car res))
+              (let ((pos (javaimp-scope-open-brace (car res))))
+                (put-text-property pos (1+ pos) 'javaimp-parse-scope 'unknown)))
+          (if (javaimp-scope-p (car res))
+              (progn
+                (setf (javaimp-scope-parent (car res)) parent)
+                (setq parent (car res)))
+            ;; Just reset remaining scopes, and return nil
+            (setq reset-tail t)
+            (setq parent nil)))
         (setq res (cdr res)))
       parent)))
 

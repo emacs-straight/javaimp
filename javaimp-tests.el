@@ -377,5 +377,24 @@ package commented.block;
         (setcdr elt (nth 1 elt))
       (javaimp-test--imenu-simplify-entries (cdr elt)))))
 
+
+;; Utility
+
+(defun javaimp-test--with-data (filename handler)
+  "Untars testdata/FILENAME into temporary directory and runs
+HANDLER, supplying temp directory name as the only arg."
+  (let ((tmpdir (file-name-as-directory (make-temp-file "javaimp" t))))
+    (unwind-protect
+        (let ((rc (call-process
+                   "tar" nil nil nil
+                   "-x"
+                   "-f" (concat javaimp--basedir
+                                (file-name-as-directory "testdata")
+                                filename)
+                   "-C" tmpdir)))
+          (unless (= rc 0)
+            (error "Cannot untar test data %s: %d" filename rc))
+          (funcall handler tmpdir))
+      (delete-directory tmpdir t))))
 
 (provide 'javaimp-tests)

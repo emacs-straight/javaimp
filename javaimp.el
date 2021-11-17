@@ -75,6 +75,7 @@
 (require 'javaimp-maven)
 (require 'javaimp-gradle)
 (require 'javaimp-parse)
+(require 'javaimp-util)
 (require 'cc-mode)                      ;for java-mode-syntax-table
 (require 'imenu)
 
@@ -184,9 +185,15 @@ A handler function takes one argument, a FILE.")
 (defvar javaimp-project-forest nil
   "Visited projects")
 
-(defvar javaimp-jar-cache nil
-  "Jar cache, an alist of (FILE . JAR), where FILE is expanded
-file name and JAR is javaimp-cached-jar struct.")
+(defvar javaimp-jar-file-cache nil
+  "Jar file cache, an alist of (FILE . CACHED-FILE), where FILE is
+expanded file name and CACHED-FILE is javaimp-cached-file
+struct.")
+
+(defvar javaimp-source-file-cache nil
+  "Source file cache, an alist of (FILE . CACHED-FILE), where FILE
+is expanded file name and CACHED-FILE is javaimp-cached-file
+struct.")
 
 (defvar javaimp-syntax-table
   (make-syntax-table java-mode-syntax-table) ;TODO don't depend
@@ -267,14 +274,14 @@ any module's source file."
       (message "Loaded project from %s" file))))
 
 
-;; Dependency jars
+;; Dependencies
 
 (defun javaimp--update-module-maybe (node)
   (let ((module (javaimp-node-contents node))
 	need-update ids)
     ;; check if deps are initialized
     (unless (javaimp-module-dep-jars module)
-      (message "Loading dependencies for module: %s" (javaimp-module-id module))
+      (message "Will load dependencies for %s" (javaimp-module-id module))
       (setq need-update t))
     ;; check if this or any parent build file has changed since we
     ;; loaded the module
@@ -303,22 +310,10 @@ any module's source file."
             (current-time)))))
 
 (defun javaimp--get-jar-classes (file)
-  (condition-case err
-      (let ((jar (alist-get file javaimp-jar-cache nil nil #'equal)))
-        (when (or (not jar)
-                  ;; If the file doesn't exist this will be current
-                  ;; time, and thus condition always true
-                  (> (float-time (javaimp--get-file-ts file))
-	             (float-time (javaimp-cached-jar-read-ts jar))))
-          (setq jar (make-javaimp-cached-jar
-		     :file file
-		     :read-ts (javaimp--get-file-ts file)
-		     :classes (javaimp--read-jar-classes file))))
-        (setf (alist-get file javaimp-jar-cache) jar)
-        (javaimp-cached-jar-classes jar))
-    (t
-     (setf (alist-get file javaimp-jar-cache nil 'remove #'equal) nil)
-     (signal (car err) (cdr err)))))
+  (javaimp--get-file-classes-cached
+   file
+   'javaimp-jar-file-cache
+   #'javaimp--read-jar-classes))
 
 (defun javaimp--read-jar-classes (file)
   "Read FILE which should be a .jar or a .jmod and return classes
@@ -502,20 +497,28 @@ If there's no such directive, then the last resort is just
 
 (defun javaimp--get-file-classes (file)
   (if-let ((buf (get-file-buffer file)))
+      ;; Don't use cache, just collect what we have in buffer
       (with-current-buffer buf
         (save-excursion
           (save-restriction
             (widen)
             (javaimp--get-buffer-classes))))
-    (with-temp-buffer
-      (insert-file-contents file)
-      ;; We need only class-likes, and this is temp buffer, so for
-      ;; efficiency avoid parsing anything else
-      (let ((javaimp--parse-scope-hook #'javaimp--parse-scope-class))
-        (javaimp--get-buffer-classes)))))
+    (javaimp--get-file-classes-cached
+     file
+     'javaimp-source-file-cache
+     #'javaimp--read-source-classes)))
+
+(defun javaimp--read-source-classes (file)
+  (with-temp-buffer
+    (insert-file-contents file)
+    ;; We need only class-likes, and this is temp buffer, so for
+    ;; efficiency avoid parsing anything else
+    (let ((javaimp--parse-scope-hook #'javaimp--parse-scope-class))
+      (javaimp--get-buffer-classes))))
 
 (defun javaimp--get-buffer-classes ()
-  "Return fully-qualified names of all class-like scopes."
+  "Return fully-qualified names of all class-like scopes in the
+current buffer."
   (let ((package (javaimp--parse-get-package))
         (scopes (javaimp--parse-get-all-scopes
                  (lambda (scope)
@@ -813,10 +816,11 @@ start (`javaimp-scope-start') instead."
 
 ;; Misc
 
-(defun javaimp-forget-all-cached ()
-  "Forget all cached data."
-  (setq javaimp-jar-cache nil))
-
+(defun javaimp-flush-cache ()
+  "Flush all caches."
+  (interactive)
+  (setq javaimp-jar-file-cache nil
+        javaimp-source-file-cache nil))
 
 (provide 'javaimp)
 
