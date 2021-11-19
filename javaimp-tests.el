@@ -187,12 +187,17 @@ package commented.block;
   (with-temp-buffer
     (insert-file-contents
      (concat javaimp--basedir "testdata/test1-misc-classes.java"))
+    (should-not javaimp--parse-dirty-pos)
+    ;;
     ;; parse full buffer
     (javaimp-test--check-named-scopes)
+    (should javaimp--parse-dirty-pos)
+    (should-not (marker-position javaimp--parse-dirty-pos))
     ;;
-    ;; reparse half of buffer
-    (setq javaimp--parse-dirty-pos (/ (- (point-max) (point-min)) 2))
+    ;; reparse half of the buffer
+    (set-marker javaimp--parse-dirty-pos (/ (- (point-max) (point-min)) 2))
     (javaimp-test--check-named-scopes)
+    (should-not (marker-position javaimp--parse-dirty-pos))
     ;;
     ;; don't reparse
     (javaimp-test--check-named-scopes)))

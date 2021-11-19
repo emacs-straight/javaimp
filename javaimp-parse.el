@@ -31,9 +31,12 @@
 (defconst javaimp--parse-stmt-keyword-maxlen
   (seq-max (mapcar #'length javaimp--parse-stmt-keywords)))
 
-(defvar-local javaimp--parse-dirty-pos 'init
-  "Buffer position after which all parsed information should be
-considered as stale.  Usually set by modification change hooks.")
+(defvar-local javaimp--parse-dirty-pos nil
+  "Marker which points to a buffer position after which all parsed
+information should be considered as stale.  Usually set by
+modification change hooks.  Nil value means we haven't yet parsed
+anything in the buffer.  A marker pointing nowhere means
+everything's up-to-date.")
 
 (defsubst javaimp--parse-substr-before-< (str)
   (let ((end (string-search "<" str)))
@@ -368,34 +371,32 @@ it's set to 'unknown' too."
       parent)))
 
 (defun javaimp--parse-all-scopes ()
-  "Entry point to the scope parsing.  Parses scopes in this
-buffer which are after `javaimp--parse-dirty-pos', if it is
-non-nil.  Resets this variable after parsing is done."
-  (when javaimp--parse-dirty-pos
-    (javaimp--parse-ensure-buffer-setup)
-    ;; cc-mode sets some costly modification hooks, we can inhibit
-    ;; them because we update only our private props here
-    (let ((inhibit-modification-hooks t))
-      (with-silent-modifications
-        (remove-text-properties javaimp--parse-dirty-pos (point-max)
-                                '(javaimp-parse-scope nil))
-        (goto-char (point-max))
-        (let ((parse-sexp-ignore-comments t)
-              (parse-sexp-lookup-properties nil))
-          (with-syntax-table javaimp-syntax-table
-            (while (javaimp--parse-rsb-keyword "{" javaimp--parse-dirty-pos t)
-              (save-excursion
-                (forward-char)
-                ;; Set props at this brace and all the way up
-                (javaimp--parse-scopes nil))))))
-      (setq javaimp--parse-dirty-pos nil))))
+  "Entry point to the scope parsing.  Parses scopes in this buffer
+which are after `javaimp--parse-dirty-pos', if it points
+anywhere.  Makes it point nowhere when done."
+  (unless javaimp--parse-dirty-pos
+    (setq javaimp--parse-dirty-pos (point-min-marker))
+    (javaimp--parse-setup-buffer))
+  (when (marker-position javaimp--parse-dirty-pos)
+    (with-silent-modifications          ;we update only private props
+      (remove-text-properties javaimp--parse-dirty-pos (point-max)
+                              '(javaimp-parse-scope nil))
+      (goto-char (point-max))
+      (let ((parse-sexp-ignore-comments t)
+            ;; Can be removed when we no longer rely on cc-mode
+            (parse-sexp-lookup-properties nil))
+        (with-syntax-table javaimp-syntax-table
+          (while (javaimp--parse-rsb-keyword "{" javaimp--parse-dirty-pos t)
+            (save-excursion
+              (forward-char)
+              ;; Set props at this brace and all the way up
+              (javaimp--parse-scopes nil))))))
+    (set-marker javaimp--parse-dirty-pos nil)))
 
-(defun javaimp--parse-ensure-buffer-setup ()
+(defun javaimp--parse-setup-buffer ()
   ;; FIXME This may be done in major/minor mode setup
-  (when (eq javaimp--parse-dirty-pos 'init)
-    (setq javaimp--parse-dirty-pos (point-min))
-    (setq syntax-ppss-table javaimp-syntax-table)
-    (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos)))
+  (setq syntax-ppss-table javaimp-syntax-table)
+  (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos))
 
 (defun javaimp--parse-class-abstract-methods ()
   (goto-char (point-max))
@@ -439,10 +440,10 @@ non-nil.  Resets this variable after parsing is done."
 
 (defun javaimp--parse-update-dirty-pos (beg _end _old-len)
   "Function to add to `after-change-functions' hook."
-  (when (or (not javaimp--parse-dirty-pos)
-            (and (numberp javaimp--parse-dirty-pos)
+  (when (and javaimp--parse-dirty-pos
+             (or (not (marker-position javaimp--parse-dirty-pos))
                  (< beg javaimp--parse-dirty-pos)))
-    (setq javaimp--parse-dirty-pos beg)))
+    (set-marker javaimp--parse-dirty-pos beg)))
 
 
 ;; Functions intended to be called from other parts of javaimp.  They
