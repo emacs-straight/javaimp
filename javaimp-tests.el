@@ -172,16 +172,42 @@ throws E1 {"
         (should (equal (javaimp-scope-name (car scopes)) (nth 2 item)))))))
 
 
-;; Tests for parsing
+;; Tests for parse "api"
 
 (ert-deftest javaimp-test--parse-get-package ()
   (with-temp-buffer
-    (insert "  package  foo.bar.baz  ;
+    (insert "
+  package  foo.bar.baz  ;
 //package commented.line;
 /*
 package commented.block;
-*/")
+*/
+")
     (should (equal (javaimp--parse-get-package) "foo.bar.baz"))))
+
+(ert-deftest javaimp-test--parse-get-imports ()
+  (with-temp-buffer
+    (insert "
+  import  some.class1  ;
+import  static  some.class.fun1;
+//import commented.line;
+/*
+import static commented.block;
+*/
+import someclass2;
+import my.package.* ;
+
+import static some_class.fun_2; // comment
+// comment outside
+")
+    (should (equal
+             (javaimp--parse-get-imports)
+             '((2 . 206)
+               ("some.class1" . normal)
+               ("some.class.fun1" . static)
+               ("someclass2" . normal)
+               ("my.package.*" . normal)
+               ("some_class.fun_2" . static))))))
 
 (ert-deftest javaimp-test--parse-get-all-scopes ()
   (with-temp-buffer

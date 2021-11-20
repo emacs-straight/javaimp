@@ -422,7 +422,7 @@ current module or source tree, see
                                eol))))))
      (list (completing-read "Import: " classes nil t nil nil
                             (symbol-name (symbol-at-point))))))
-  (javaimp-organize-imports (cons classname 'ordinary)))
+  (javaimp-organize-imports (list (cons classname 'normal))))
 
 (defun javaimp--get-jdk-classes (java-home)
   "If 'jmods' subdirectory exists in JAVA-HOME (Java 9+), read all
@@ -542,117 +542,87 @@ current buffer."
 ;; Organizing imports
 
 ;;;###autoload
-(defun javaimp-organize-imports (&rest new-imports)
-  "Groups import statements according to the value of
+(defun javaimp-organize-imports (&optional add-alist)
+  "Group import statements according to the value of
 `javaimp-import-group-alist' (which see) and prints resulting
-groups leaving one blank line between groups.
+groups putting one blank line between groups.
 
-If the file already contains some import statements, this command
-rewrites them, starting with the same place.  Else, if the the
-file contains package directive, this command inserts one blank
-line below and then imports.  Otherwise, imports are inserted at
-the beginning of buffer.
+If buffer already contains some import statements, put imports at
+that place.  Else, if there's a package directive, put imports
+below it, separated by one line.  Else, just put them at bob.
 
-Classes within a single group are ordered in a lexicographic
-order.  Imports not matched by any regexp in `javaimp-import-group-alist'
+Classes within a single group are sorted lexicographically.
+Imports not matched by any regexp in `javaimp-import-group-alist'
 are assigned a default order defined by
-`javaimp-import-default-order'.  Duplicate imports are squashed.
+`javaimp-import-default-order'.  Duplicate imports are elided.
 
-NEW-IMPORTS is a list of additional imports; each element should
-be of the form (CLASS . TYPE), where CLASS is a string and TYPE
-is `ordinary' or `static'.  Interactively, NEW-IMPORTS is nil."
+Additionally, merge imports from ADD-ALIST, an alist of the same
+form as CLASS-ALIST in return value of
+`javaimp--parse-get-imports'."
   (interactive)
   (barf-if-buffer-read-only)
   (save-excursion
-    (goto-char (point-min))
-    (let* ((old-data (javaimp--parse-imports))
-	   (first (car old-data))
-	   (last (cadr old-data))
-	   (all-imports (append new-imports (cddr old-data))))
-      (if all-imports
-	  (progn
-	    ;; delete old imports, if any
-	    (if first
-		(progn
-		  (goto-char last)
-		  (forward-line)
-		  (delete-region first (point))))
-	    (javaimp--prepare-for-insertion first)
-	    (setq all-imports
-		  (cl-delete-duplicates
-                   all-imports
-                   :test (lambda (first second)
-                           (equal (car first) (car second)))))
-	    ;; assign order
-	    (let ((with-order
+    (save-restriction
+      (widen)
+      (let ((parsed (javaimp--parse-get-imports)))
+        (when (or (cdr parsed) add-alist)
+          (javaimp--parse-without-hook
+            (javaimp--position-for-insert-imports (car parsed))
+            (let ((with-order
 		   (mapcar
 		    (lambda (import)
-		      (let ((order (or (assoc-default (car import)
-						      javaimp-import-group-alist
-						      'string-match)
-				       javaimp-import-default-order)))
-			(cons import order)))
-		    all-imports)))
+		      (let ((order
+                             (or (assoc-default (car import)
+                                                javaimp-import-group-alist
+					        'string-match)
+			         javaimp-import-default-order)))
+		        (cons import order)))
+                    (delete-dups (append (cdr parsed) add-alist))))
+                  by-type)
 	      (setq with-order
 		    (sort with-order
 			  (lambda (first second)
-			    ;; sort by order, name
-			    (if (= (cdr first) (cdr second))
-				(string< (caar first) (caar second))
-			      (< (cdr first) (cdr second))))))
-	      (javaimp--insert-imports with-order)))
-        (message "Nothing to organize!")))))
+			    ;; sort by order then name
+			    (if (/= (cdr first) (cdr second))
+                                (< (cdr first) (cdr second))
+			      (string< (caar first) (caar second))))))
+              (setq by-type (seq-group-by #'cdar with-order))
+              (javaimp--insert-import-group
+               (cdr (assq 'normal by-type)) "import %s;\n")
+              (javaimp--insert-import-group
+               (cdr (assq 'static by-type)) "import static %s;\n"))
+            ;; Make sure there's only one blank line after
+            (forward-line -2)
+            (delete-blank-lines)
+            (end-of-line)
+            (insert ?\n)))))))
 
-(defun javaimp--parse-imports ()
-  "Returns (FIRST LAST . IMPORTS)"
-  (let (first last imports)
-    (while (re-search-forward "^\\s *import\\s +\\(static\\s +\\)?\\([._[:word:]]+\\)" nil t)
-      (let ((type (if (match-string 1) 'static 'ordinary))
-	    (class (match-string 2)))
-	(push (cons class type) imports))
-      (setq last (line-beginning-position))
-      (or first (setq first last)))
-    (cons first (cons last imports))))
+(defun javaimp--position-for-insert-imports (old-region)
+  (if old-region
+      (progn
+        (delete-region (car old-region) (cdr old-region))
+        (goto-char (car old-region)))
+    (if (javaimp--parse-get-package)
+        (insert "\n\n")
+      ;; As a last resort, go to bob and skip comments
+      (goto-char (point-min))
+      (forward-comment (buffer-size))
+      (skip-chars-backward " \t\n")
+      (unless (bobp)
+        (insert "\n\n")))))
 
-(defun javaimp--prepare-for-insertion (start)
-  (cond (start
-	 ;; if there were any imports, we start inserting at the same place
-	 (goto-char start))
-	((re-search-forward "^\\s *package\\s " nil t)
-	 ;; if there's a package directive, insert one blank line
-	 ;; below it
-	 (end-of-line)
-	 (if (eobp)
-	     (insert ?\n)
-	   (forward-line))
-	 (insert ?\n))
-	(t
-	 ;; otherwise, just go to bob
-	 (goto-char (point-min)))))
-
-(defun javaimp--insert-imports (imports)
-  (let ((static (seq-filter (lambda (elt)
-			      (eq (cdar elt) 'static))
-			    imports))
-	(ordinary (seq-filter (lambda (elt)
-				(eq (cdar elt) 'ordinary))
-			      imports)))
-    (javaimp--insert-import-group "import static %s;" static)
-    (and static ordinary (insert ?\n))
-    (javaimp--insert-import-group "import %s;" ordinary)))
-
-(defun javaimp--insert-import-group (pattern imports)
-  (let (last-order)
+(defun javaimp--insert-import-group (imports fmt)
+  (let (prev-order)
     (dolist (import imports)
-      ;; if adjacent imports have different order value, insert a newline
-      ;; between them
-      (let ((order (cdr import)))
-	(and last-order
-	     (/= order last-order)
-	     (insert ?\n))
-	(insert (format pattern (caar import)) ?\n)
-	(setq last-order order)))))
-
+      ;; If adjacent imports have different order value, insert a
+      ;; newline between them
+      (and prev-order
+	   (/= (cdr import) prev-order)
+	   (insert ?\n))
+      (insert (format fmt (caar import)))
+      (setq prev-order (cdr import)))
+    (when imports
+      (insert ?\n))))
 
 
 ;; Imenu support
@@ -780,13 +750,22 @@ start (`javaimp-scope-start') instead."
                        (javaimp-scope-start scope)
                      (javaimp-scope-open-brace scope)))))))
 
-(defun javaimp-help-show-scopes ()
-  "Show scopes in a *javaimp-scopes* buffer."
-  (interactive)
-  (let ((scopes (save-excursion
-                  (save-restriction
-                    (widen)
-                    (javaimp--parse-get-all-scopes))))
+(defun javaimp-help-show-scopes (&optional show-all)
+  "Show scopes in a *javaimp-scopes* buffer, with clickable
+entries.  By default, the scopes are only those which appear in
+Imenu (`javaimp-imenu-create-index' is responsible for that), but
+with prefix arg, show all scopes."
+  (interactive "P")
+  (let ((scopes
+         (save-excursion
+           (save-restriction
+             (widen)
+             (javaimp--parse-get-all-scopes
+              (unless show-all
+                (lambda (scope)
+                  (javaimp-test-scope-type scope
+                    '(class interface enum method)
+                    javaimp--classlike-scope-types)))))))
         (file buffer-file-name)
         (buf (get-buffer-create "*javaimp-scopes*")))
     (with-current-buffer buf

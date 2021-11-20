@@ -31,6 +31,19 @@
 (defconst javaimp--parse-stmt-keyword-maxlen
   (seq-max (mapcar #'length javaimp--parse-stmt-keywords)))
 
+(defun javaimp--directive-regexp (directive)
+  "Return regexp suitable for matching package-like DIRECTIVE, a
+regexp.  First group is directive, second group is identifier."
+  (rx bol (* space)
+      (group (regexp directive)) (+ space)
+      (group (+ (any alnum ?_)) (* ?. (+ (any alnum ?_ ?*))))
+      (* space) ?\;))
+
+(defconst javaimp--parse-package-regexp
+  (javaimp--directive-regexp "package"))
+(defconst javaimp--parse-import-regexp
+  (javaimp--directive-regexp "import\\(?:[[:space:]]+static\\)?"))
+
 (defvar-local javaimp--parse-dirty-pos nil
   "Marker which points to a buffer position after which all parsed
 information should be considered as stale.  Usually set by
@@ -45,9 +58,9 @@ everything's up-to-date.")
       str)))
 
 (defun javaimp--parse-rsb-keyword (regexp &optional bound noerror count)
-  "Like `re-search-backward', but count only occurences outside
-syntactic context as given by `syntax-ppss-context'.  Assumes
-point is outside of any context initially."
+  "Like `re-search-backward', but count only occurences which start
+outside any syntactic context as given by `syntax-ppss-context'.
+Assumes point is outside of any context initially."
   (or count (setq count 1))
   (let ((step (if (>= count 0) 1 -1))
         (case-fold-search nil)
@@ -396,6 +409,7 @@ anywhere.  Makes it point nowhere when done."
 (defun javaimp--parse-setup-buffer ()
   ;; FIXME This may be done in major/minor mode setup
   (setq syntax-ppss-table javaimp-syntax-table)
+  (setq-local multibyte-syntax-as-symbol t)
   (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos))
 
 (defun javaimp--parse-class-abstract-methods ()
@@ -451,12 +465,33 @@ anywhere.  Makes it point nowhere when done."
 ;; responsibility.
 
 (defun javaimp--parse-get-package ()
-  "Return the package declared in the current file."
+  "Return the package declared in the current file.  Leaves point
+at the end of directive."
   (javaimp--parse-all-scopes)
   (goto-char (point-max))
-  (when (javaimp--parse-rsb-keyword
-         "^[ \t]*package[ \t]+\\([^ \t;\n]+\\)[ \t]*;" nil t 1)
-    (match-string 1)))
+  (when (javaimp--parse-rsb-keyword javaimp--parse-package-regexp nil t 1)
+    (goto-char (match-end 0))
+    (match-string 2)))
+
+(defun javaimp--parse-get-imports ()
+  "Parse import directives in the current buffer and return (REGION
+. CLASS-ALIST).  REGION, a cons of two positions, spans from bol
+of first import to eol of last import.  CLASS-ALIST contains
+elements (CLASS . TYPE), where CLASS is a string and TYPE is
+either of symbols `normal' or 'static'."
+  (javaimp--parse-all-scopes)
+  (goto-char (point-max))
+  (let (start-pos end-pos class-alist)
+    (while (javaimp--parse-rsb-keyword javaimp--parse-import-regexp nil t)
+      (setq start-pos (line-beginning-position))
+      (unless end-pos
+        (setq end-pos (line-end-position)))
+      (push (cons (match-string 2)
+                  (if (string-search "static" (match-string 1))
+                      'static 'normal))
+            class-alist))
+    (cons (and start-pos end-pos (cons start-pos end-pos))
+          class-alist)))
 
 (defun javaimp--parse-get-all-scopes (&optional pred parent-pred)
   "Return all scopes in the current buffer, optionally filtering
@@ -487,5 +522,16 @@ them should move point."
                          '(interface) javaimp--classlike-scope-types)))))
     (seq-mapcat #'javaimp--parse-interface-abstract-methods
                 interfaces)))
+
+(defmacro javaimp--parse-without-hook (&rest body)
+  "Execute BODY, temporarily removing
+`javaimp--parse-update-dirty-pos' from `after-change-functions'
+hook."
+  (declare (debug t) (indent 0))
+  `(unwind-protect
+       (progn
+         (remove-hook 'after-change-functions #'javaimp--parse-update-dirty-pos)
+         ,@body)
+     (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos)))
 
 (provide 'javaimp-parse)
