@@ -167,14 +167,14 @@ function is to just skip whitespace / comments."
                  (setq last-what 'char
                        last-pos (point)))))))))
 
-(defun javaimp--parse-preceding (regexp scope-start &optional skip-count)
-  "Returns non-nil if a match for REGEXP is found before point.
-Matches inside comments / strings are skipped.  Potential match
-is checked to be SKIP-COUNT lists away from the SCOPE-START (1 is
-for scope start itself, so if you want to skip one additional
-list, use 2 etc.).  If a match is found, then match-data is set,
-as for `re-search-backward'."
-  (and (javaimp--parse-rsb-keyword regexp nil t)
+(defun javaimp--parse-preceding (regexp scope-start &optional bound skip-count)
+  "Returns non-nil if a match for REGEXP is found before point,
+but not before BOUND.  Matches inside comments / strings are
+skipped.  Potential match is checked to be SKIP-COUNT lists away
+from the SCOPE-START (1 is for scope start itself, so if you want
+to skip one additional list, use 2 etc.).  If a match is found,
+then match-data is set, as for `re-search-backward'."
+  (and (javaimp--parse-rsb-keyword regexp bound t)
        (ignore-errors
          ;; Does our match belong to the right block?
          (= (scan-lists (match-end 0) (or skip-count 1) -1)
@@ -224,25 +224,32 @@ the position of opening brace.")
 (defun javaimp--parse-scope-class (brace-pos)
   "Attempts to parse 'class' / 'interface' / 'enum' scope."
   (save-excursion
-    (if (javaimp--parse-preceding (regexp-opt javaimp--parse-classlike-keywords 'symbols)
-                                  brace-pos)
-        (let* ((keyword-start (match-beginning 1))
-               (keyword-end (match-end 1))
-               arglist)
-          (goto-char brace-pos)
-          (or (javaimp--parse-decl-suffix "\\_<extends\\_>" brace-pos keyword-end)
-              (javaimp--parse-decl-suffix "\\_<implements\\_>" brace-pos keyword-end)
-              (javaimp--parse-decl-suffix "\\_<permits\\_>" brace-pos keyword-end))
-          ;; we either skipped back over the valid declaration
-          ;; suffix(-es), or there wasn't any
-          (setq arglist (javaimp--parse-arglist keyword-end (point) t))
-          (when (= (length arglist) 1)
-            (make-javaimp-scope :type (intern
-                                       (buffer-substring-no-properties
-                                        keyword-start keyword-end))
-                                :name (javaimp--parse-substr-before-< (caar arglist))
-                                :start keyword-start
-                                :open-brace brace-pos))))))
+    (when (javaimp--parse-preceding
+           (regexp-opt javaimp--parse-classlike-keywords 'symbols)
+           brace-pos
+           ;; closest preceding closing paren is a good bound
+           ;; because there _will be_ such char in frequent case
+           ;; of method/stmt
+           (save-excursion
+             (when (javaimp--parse-rsb-keyword ")" nil t 1)
+               (1+ (point)))))
+      (let* ((keyword-start (match-beginning 1))
+             (keyword-end (match-end 1))
+             arglist)
+        (goto-char brace-pos)
+        (or (javaimp--parse-decl-suffix "\\_<extends\\_>" brace-pos keyword-end)
+            (javaimp--parse-decl-suffix "\\_<implements\\_>" brace-pos keyword-end)
+            (javaimp--parse-decl-suffix "\\_<permits\\_>" brace-pos keyword-end))
+        ;; we either skipped back over the valid declaration
+        ;; suffix(-es), or there wasn't any
+        (setq arglist (javaimp--parse-arglist keyword-end (point) t))
+        (when (= (length arglist) 1)
+          (make-javaimp-scope :type (intern
+                                     (buffer-substring-no-properties
+                                      keyword-start keyword-end))
+                              :name (javaimp--parse-substr-before-< (caar arglist))
+                              :start keyword-start
+                              :open-brace brace-pos))))))
 
 (defun javaimp--parse-scope-simple-stmt (brace-pos)
   "Attempts to parse 'simple-statement' scope."
@@ -272,7 +279,7 @@ the position of opening brace.")
                   (scan-lists (point) -1 0))))
       (let ((end (point))
             start arglist)
-        (when (javaimp--parse-preceding "\\_<new\\_>" brace-pos 2)
+        (when (javaimp--parse-preceding "\\_<new\\_>" brace-pos nil 2)
           (setq start (match-beginning 0)
                 arglist (javaimp--parse-arglist (match-end 0) end t))
           (when (= (length arglist) 1)
@@ -285,13 +292,13 @@ the position of opening brace.")
   "Attempts to parse 'method' or 'statement' scope."
   (save-excursion
     (let (;; take the closest preceding closing paren as the bound
-          (search-bound (save-excursion
-                          (when (javaimp--parse-rsb-keyword ")" nil t 1)
-                            (1+ (point))))))
-      (when search-bound
+          (throws-search-bound (save-excursion
+                                 (when (javaimp--parse-rsb-keyword ")" nil t 1)
+                                   (1+ (point))))))
+      (when throws-search-bound
         (let ((throws-args
                (when-let ((pos (javaimp--parse-decl-suffix
-                                "\\_<throws\\_>" brace-pos search-bound)))
+                                "\\_<throws\\_>" brace-pos throws-search-bound)))
                  (or (javaimp--parse-arglist pos brace-pos t)
                      t))))
           (when (and (not (eq throws-args t))
@@ -318,12 +325,12 @@ the position of opening brace.")
               (when type
                 (make-javaimp-scope
                  :type type
-                 :name (if (eq type 'statement)
-                           name
-                         (let ((args (javaimp--parse-arglist
-                                      (car arglist-region)
-                                      (cdr arglist-region))))
-                           (concat name "(" (mapconcat #'car args ",") ")")))
+                 :name (if (eq type 'method)
+                           (let ((args (javaimp--parse-arglist
+                                        (car arglist-region)
+                                        (cdr arglist-region))))
+                             (concat name "(" (mapconcat #'car args ",") ")"))
+                         name)
                  :start (point)
                  :open-brace brace-pos)))))))))
 
