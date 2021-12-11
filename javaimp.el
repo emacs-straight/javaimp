@@ -23,51 +23,91 @@
 ;;; Commentary:
 
 ;; Allows to manage Java import statements in Maven/Gradle projects.
+;; This module does not add all needed imports automatically!  It only
+;; helps you to quickly add imports when stepping through compilation
+;; errors.  In addition, this module provides good Imenu support for
+;; Java source files - with nesting and abstract methods in interfaces
+;; and abstract classes.
+;;
 ;;
 ;;   Quick start:
 ;;
-;; - customize `javaimp-import-group-alist'
-;; - call `javaimp-visit-project', giving it the top-level project
-;; directory where pom.xml / build.gradle[.kts] resides
+;; - Customize `javaimp-import-group-alist'.
 ;;
-;; Then in a Java buffer visiting a file under that project or one of its
-;; submodules call `javaimp-organize-imports' or `javaimp-add-import'.
+;; - Call `javaimp-visit-project', giving it the top-level build file
+;; of your project.  If called within a project, supplies useful
+;; default candidates in minibuffer input.
 ;;
-;; This module does not add all needed imports automatically!  It only helps
-;; you to quickly add imports when stepping through compilation errors.
+;; - Then in a Java buffer visiting a file under that project or one
+;; of its submodules call `javaimp-organize-imports' or
+;; `javaimp-add-import'.
+;;
 ;;
 ;;   Some details:
 ;;
-;; Contents of jar files and Maven/Gradle project structures are
-;; cached, so usually only the first command should take a
-;; considerable amount of time to complete.  If a module's build file
-;; or any of its parents' build files (within visited tree) was
-;; modified after information was loaded, dependencies are fetched
-;; from the build tool again.  If a jar file was changed, its contents
-;; are re-read.
+;; Contents of jar files, list of classes in source files, and
+;; Maven/Gradle project structures are cached, so usually only the
+;; first command should take a considerable amount of time to
+;; complete.  Project structure is re-read if a module's build file or
+;; any of its parents' build files (within visited tree) was modified
+;; since last check.  `javaimp-flush-cache' clears jar / source cache.
+;; To forget visited projects structure, eval `(setq javaimp-project
+;; forest nil)'.
+;;
+;; Project structure and dependency information is retrieved from the
+;; build tool, see `javaimp--maven-visit' and `javaimp--gradle-visit'.
+;; The output from the build tool can be inspected in buffer named by
+;; `javaimp-tool-output-buf-name' variable.
+;;
+;; See docstring of `javaimp-add-import' for how import completion
+;; alternative are collected.
+;;
+;; Important defcustoms are:
+;;
+;; - `javaimp-java-home' - used to obtain classes in the JDK, and also
+;; the build tool is invoked with JAVA_HOME environment variable set
+;; to it.  It's initialized from JAVA_HOME env var, so typically it's
+;; not required to set it explicitly in Lisp.
+;;
+;; - `javaimp-enable-parsing' - determines whether we parse the
+;; current project for the list of classes.  Parsing is implemented in
+;; javaimp-parse.el using `syntax-ppss', generally is simple (we do
+;; not try to parse the source completely - just the interesting
+;; pieces), but can be time-consuming for large projects (to be
+;; improved).  Currently, on the author's machine, source for
+;; java.util.Collections from JDK 11 (~ 5600 lines and > 1000
+;; "scopes") parses in ~1.5 seconds, which is not that bad...
+;;
+;; Parsing is also used for Imenu support.  A simple debug command,
+;; `javaimp-help-show-scopes', lists all parsed "scopes" (blocks of
+;; code in braces).  As there's no minor/major mode (yet), you have to
+;; set `imenu-create-index-function' in major mode hook yourself.  See
+;; example below.
+;;
+;; - `javaimp-imenu-use-sub-alists' - if non-nil then Imenu items are
+;; presented in a nested fashion, instead of a flat list (the
+;; default).
+;;
+;; See other defcustoms via 'M-x customize-group javaimp'.
 ;;
 ;;
-;;   Example:
+;; Configuration example:
 ;;
 ;; (require 'javaimp)
 ;; (add-to-list 'javaimp-import-group-alist
 ;;   '("\\`\\(my\\.company\\.\\|my\\.company2\\.\\)" . 80))
-;; (setq javaimp-additional-source-dirs '("generated-sources/thrift"))
-;; (add-hook 'java-mode-hook
-;; 	  (lambda ()
-;; 	    (local-set-key "\C-ci" #'javaimp-add-import)
-;; 	    (local-set-key "\C-co" #'javaimp-organize-imports)))
-;; (global-set-key (kbd "C-c j v") #'javaimp-visit-project)
+;; (global-set-key (kbd "C-c J v") 'javaimp-visit-project)
 ;;
-
-;;; News:
-
-;; v0.7:
-;; - Added Gradle support.
 ;;
-;; - Removed javaimp-maven-visit-project in favor of javaimp-visit-project.
+;; And in `java-mode-hook':
 ;;
-;; - Split into multiple files.
+;; (local-set-key (kbd "C-c i") #'javaimp-add-import)
+;; (local-set-key (kbd "C-c o") #'javaimp-organize-imports)
+;; (local-set-key (kbd "C-c s") #'javaimp-help-show-scopes)
+;;
+;; To enable Imenu, overriding Imenu support from cc-mode:
+;;
+;; (setq imenu-create-index-function #'javaimp-imenu-create-index)
 
 
 ;;; Code:
@@ -119,18 +159,15 @@ initialized from the JAVA_HOME environment variable."
   "List of directories where additional (e.g. generated)
 source files reside.
 
-Each directory is a relative path from ${project.build.directory} project
-property value.
+Each directory in the list should be a name relative to project
+build directory.
 
-Typically you would check documentation for a Maven plugin, look
-at the parameter's default value there and add it to this list.
-
+With Maven, typically you would check the documentation for a
+particular plugin, look for default value there, and add it to
+this list.
 E.g. \"${project.build.directory}/generated-sources/<plugin_name>\"
-becomes \"generated-sources/<plugin_name>\" (note the absence
-of the leading slash.
-
-Custom values set in plugin configuration in pom.xml are not
-supported yet."
+becomes \"generated-sources/<plugin_name>\" (note the absence of
+the leading slash)."
   :type '(repeat (string :tag "Relative directory")))
 
 (defcustom javaimp-enable-parsing t
