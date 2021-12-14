@@ -4,7 +4,7 @@
 
 ;; Author: Filipp Gunbin <fgunbin@fastmail.fm>
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
-;; Version: 0.7.1
+;; Version: 0.8
 ;; Keywords: java, maven, gradle, programming
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -36,7 +36,8 @@
 ;;
 ;; - Call `javaimp-visit-project', giving it the top-level build file
 ;; of your project.  If called within a project, supplies useful
-;; default candidates in minibuffer input.
+;; default candidates in minibuffer input (topmost build file in the
+;; current directory hierarchy, then nested ones).
 ;;
 ;; - Then in a Java buffer visiting a file under that project or one
 ;; of its submodules call `javaimp-organize-imports' or
@@ -51,16 +52,28 @@
 ;; complete.  Project structure is re-read if a module's build file or
 ;; any of its parents' build files (within visited tree) was modified
 ;; since last check.  `javaimp-flush-cache' clears jar / source cache.
-;; To forget visited projects structure, eval `(setq javaimp-project
-;; forest nil)'.
+;;
+;; To forget visited projects structure eval this:
+;; (setq javaimp-project forest nil)
 ;;
 ;; Project structure and dependency information is retrieved from the
-;; build tool, see `javaimp--maven-visit' and `javaimp--gradle-visit'.
-;; The output from the build tool can be inspected in buffer named by
-;; `javaimp-tool-output-buf-name' variable.
+;; build tool, see `javaimp--maven-visit' and `javaimp--gradle-visit',
+;; and the `javaimp-handler-regexp-alist' variable.  The output from
+;; the build tool can be inspected in buffer named by
+;; `javaimp-tool-output-buf-name' variable.  If there exists
+;; Maven/Gradle wrapper in the project directory, as it is popular
+;; these days, it will be used in preference to `javaimp-mvn-program'
+;; / `javaimp-gradle-program'.
 ;;
 ;; See docstring of `javaimp-add-import' for how import completion
 ;; alternative are collected.
+;;
+;; If you get jar reading errors with Gradle despite following
+;; recommendation which is shown (text from
+;; `javaimp--jar-error-header' followed by offending jars), then it
+;; might be the case that Gradle reordered build in such a way that
+;; those jars are really not built yet.  In this case, just build them
+;; manually, like: './gradlew :project1:build :project2:build'.
 ;;
 ;; Important defcustoms are:
 ;;
@@ -69,8 +82,8 @@
 ;; to it.  It's initialized from JAVA_HOME env var, so typically it's
 ;; not required to set it explicitly in Lisp.
 ;;
-;; - `javaimp-enable-parsing' - determines whether we parse the
-;; current project for the list of classes.  Parsing is implemented in
+;; - `javaimp-parse-current-module' - determines whether we parse the
+;; current module for the list of classes.  Parsing is implemented in
 ;; javaimp-parse.el using `syntax-ppss', generally is simple (we do
 ;; not try to parse the source completely - just the interesting
 ;; pieces), but can be time-consuming for large projects (to be
@@ -105,7 +118,7 @@
 ;; (local-set-key (kbd "C-c o") #'javaimp-organize-imports)
 ;; (local-set-key (kbd "C-c s") #'javaimp-help-show-scopes)
 ;;
-;; To enable Imenu, overriding Imenu support from cc-mode:
+;; To enable Imenu (overriding Imenu support from cc-mode):
 ;;
 ;; (setq imenu-create-index-function #'javaimp-imenu-create-index)
 
@@ -150,9 +163,9 @@ The order of classes which were not matched is defined by
   (let ((val (getenv "JAVA_HOME")))
     (and val (not (string-blank-p val))
          val))
-  "Path to the JDK.  Should contain subdirectory
-\"jre/lib\" (pre-JDK9) or just \"lib\".  By default, it is
-initialized from the JAVA_HOME environment variable."
+  "Path to the JDK.  The directory given should contain
+subdirectory \"jre/lib\" (pre-JDK9) or just \"lib\".  By default,
+it is initialized from the JAVA_HOME environment variable."
   :type 'string)
 
 (defcustom javaimp-additional-source-dirs nil
@@ -170,10 +183,12 @@ becomes \"generated-sources/<plugin_name>\" (note the absence of
 the leading slash)."
   :type '(repeat (string :tag "Relative directory")))
 
-(defcustom javaimp-enable-parsing t
+(defcustom javaimp-parse-current-module t
   "If non-nil, javaimp will try to parse current module's source
 files to determine completion alternatives, in addition to those
-from module dependencies."
+from module dependencies.  This can be time-consuming, that's why
+this defcustom exists, to turn it off if it's annoying (perhaps
+in per-directory locals)."
   :type 'boolean)
 
 (defcustom javaimp-imenu-use-sub-alists nil
@@ -233,7 +248,7 @@ is expanded file name and CACHED-FILE is javaimp-cached-file
 struct.")
 
 (defvar javaimp-syntax-table
-  (make-syntax-table java-mode-syntax-table) ;TODO don't depend
+  (make-syntax-table java-mode-syntax-table) ;TODO don't depend on cc-mode
   "Javaimp syntax table")
 
 (defvar javaimp--arglist-syntax-table
@@ -414,8 +429,9 @@ PREDICATE returns non-nil."
 (defun javaimp-add-import (classname)
   "Import CLASSNAME in the current buffer and call `javaimp-organize-imports'.
 Interactively, provide completion alternatives relevant for this
-file, additionally filtering them by matching simple class name
-with `symbol-at-point' (with prefix arg - just offer full set).
+file, additionally filtering them by matching simple class
+name (without package) against `symbol-at-point' (with prefix arg
+- don't filter).
 
 The set of relevant classes is collected from the following:
 
@@ -425,7 +441,7 @@ The set of relevant classes is collected from the following:
 - If current module can be determined, then add all classes from
 its dependencies.
 
-- If `javaimp-enable-parsing' is non-nil, also add classes in
+- If `javaimp-parse-current-module' is non-nil, also add classes in
 current module or source tree, see
 `javaimp--get-current-source-dirs'."
   (interactive
@@ -448,7 +464,7 @@ current module or source tree, see
                     (when module
                       (javaimp--get-module-deps-classes module))
                     ;; current module or source tree
-                    (when javaimp-enable-parsing
+                    (when javaimp-parse-current-module
                       (seq-mapcat #'javaimp--get-directory-classes
                                   (javaimp--get-current-source-dirs module)))))
           (completion-regexp-list
@@ -581,12 +597,13 @@ current buffer."
 ;;;###autoload
 (defun javaimp-organize-imports (&optional add-alist)
   "Group import statements according to the value of
-`javaimp-import-group-alist' (which see) and prints resulting
+`javaimp-import-group-alist' (which see) and print resulting
 groups putting one blank line between groups.
 
 If buffer already contains some import statements, put imports at
-that place.  Else, if there's a package directive, put imports
-below it, separated by one line.  Else, just put them at bob.
+that same place.  Else, if there's a package directive, put
+imports below it, separated by one line.  Else, just put them at
+bob.
 
 Classes within a single group are sorted lexicographically.
 Imports not matched by any regexp in `javaimp-import-group-alist'
@@ -788,8 +805,8 @@ start (`javaimp-scope-start') instead."
                      (javaimp-scope-open-brace scope)))))))
 
 (defun javaimp-help-show-scopes (&optional show-all)
-  "Show scopes in a *javaimp-scopes* buffer, with clickable
-entries.  By default, the scopes are only those which appear in
+  "Show scopes in *javaimp-scopes* buffer, with clickable
+text.  By default, the scopes are only those which appear in
 Imenu (`javaimp-imenu-create-index' is responsible for that), but
 with prefix arg, show all scopes."
   (interactive "P")
