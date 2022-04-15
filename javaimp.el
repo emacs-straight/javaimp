@@ -92,9 +92,9 @@
 ;; "scopes") parses in ~1.5 seconds, which is not that bad...
 ;;
 ;; Parsing is also used for Imenu support.  A simple debug command,
-;; `javaimp-help-show-scopes', lists all parsed "scopes" (blocks of
-;; code in braces).  As there's no minor/major mode (yet), you have to
-;; set `imenu-create-index-function' in major mode hook yourself.  See
+;; `javaimp-show-scopes', lists all parsed "scopes" (blocks of code in
+;; braces).  As there's no minor/major mode (yet), you have to set
+;; `imenu-create-index-function' in major mode hook yourself.  See
 ;; example below.
 ;;
 ;; - `javaimp-imenu-use-sub-alists' - if non-nil then Imenu items are
@@ -116,7 +116,7 @@
 ;;
 ;; (local-set-key (kbd "C-c i") #'javaimp-add-import)
 ;; (local-set-key (kbd "C-c o") #'javaimp-organize-imports)
-;; (local-set-key (kbd "C-c s") #'javaimp-help-show-scopes)
+;; (local-set-key (kbd "C-c s") #'javaimp-show-scopes)
 ;;
 ;; To enable Imenu (overriding Imenu support from cc-mode):
 ;;
@@ -695,8 +695,8 @@ in a major mode hook."
              ;; sub-alist
              (cons t (javaimp-scope-name scope))))
          (lambda (res)
-           (or (functionp (nth 2 res)) ;entry
-               (cdr res)))             ;non-empty sub-alist
+           (or (functionp (nth 2 res))  ; imenu entry
+               (cdr res)))              ; non-empty sub-alist
          forest)
       (let ((entries
              (mapcar #'javaimp-imenu--make-entry
@@ -724,7 +724,7 @@ in a major mode hook."
   (let* ((scopes (javaimp--parse-get-all-scopes
                   (lambda (scope)
                     (javaimp-test-scope-type scope
-                      '(class interface enum method)
+                      `(,@ javaimp--classlike-scope-types method)
                       javaimp--classlike-scope-types))))
          (methods (seq-filter
                    (lambda (scope)
@@ -769,44 +769,56 @@ in a major mode hook."
   (back-to-indentation))
 
 
-;; Help
+;; Show scopes
 
-(defvar javaimp-help-keymap
+(defvar javaimp-show-scopes-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "\C-m" #'javaimp-help-goto-scope)
-    (define-key map [mouse-2] #'javaimp-help-goto-scope-mouse)
+    (set-keymap-parent map text-mode-map)
+    (define-key map "\C-m" #'javaimp-show-scopes-goto-scope)
+    (define-key map [mouse-2] #'javaimp-show-scopes-goto-scope)
+    (define-key map "n" #'next-error-no-select)
+    (define-key map "p" #'previous-error-no-select)
+    (define-key map "l" #'recenter-current-error)
     map)
-  "Keymap for Javaimp help buffers.")
-
-(defun javaimp-help-goto-scope (pos)
-  "Go to scope at point in another window."
-  (interactive "d")
-  (javaimp-help--goto-scope-1 pos))
+  "Javaimp Show Scopes keymap.")
 
 ;; TODO handle mouse-1
-(defun javaimp-help-goto-scope-mouse (event)
-  "Go to scope you click on in another window."
-  (interactive "e")
-  (let ((window (posn-window (event-end event)))
-        (pos (posn-point (event-end event))))
-    (with-current-buffer (window-buffer window)
-      (javaimp-help--goto-scope-1 pos))))
+(defun javaimp-show-scopes-goto-scope (event &optional to-start)
+  "Go to the opening brace (`javaimp-scope-open-brace') of the scope.
+Target scope is determined by location of mouse EVENT, if it's
+non-nil.  Else, take the scope at current line.  When TO-START is
+non-nil, go to scope start (`javaimp-scope-start') instead of the
+opening brace."
+  (interactive (list last-nonmenu-event current-prefix-arg))
+  (let ((buf (current-buffer))
+        (scopes-buf-pos
+         (if event
+             (cons (window-buffer (posn-window (event-end event)))
+                   (posn-point (event-end event)))
+           (cons (current-buffer)
+                 (point))))
+        source-file scope)
+    (with-current-buffer (car scopes-buf-pos)
+      (setq source-file
+            (get-text-property (point-min) 'javaimp-show-scopes-file)
+            scope
+            (get-text-property (cdr scopes-buf-pos) 'javaimp-show-scopes-scope)))
+    (unless (and source-file scope)
+      (user-error "No target scope"))
+    (pop-to-buffer (find-file-noselect source-file))
+    (goto-char (if to-start
+                   (javaimp-scope-start scope)
+                 (javaimp-scope-open-brace scope)))
+    (next-error-found buf (current-buffer))))
 
-(defun javaimp-help--goto-scope-1 (pos)
-  "Go to the opening brace (`javaimp-scope-open-brace') of the
-scope at POS.  With prefix arg, go to scope
-start (`javaimp-scope-start') instead."
-  (let ((scope (get-text-property pos 'javaimp-help-scope))
-        (file (get-text-property (point-min) 'javaimp-help-file)))
-    (when (and scope file)
-      (with-current-buffer (find-file-other-window file)
-        (goto-char (if current-prefix-arg
-                       (javaimp-scope-start scope)
-                     (javaimp-scope-open-brace scope)))))))
 
-(defun javaimp-help-show-scopes (&optional show-all)
-  "Show scopes in *javaimp-scopes* buffer, with clickable
-text.  By default, the scopes are only those which appear in
+(put 'javaimp-show-scopes-mode 'mode-class 'special)
+(define-derived-mode javaimp-show-scopes-mode special-mode "Javaimp Show Scopes"
+  (setq next-error-function #'javaimp-show-scopes-next-error))
+
+(defun javaimp-show-scopes (&optional show-all)
+  "Show scopes in *javaimp-scopes* buffer, with clickable text.
+By default, the scopes are only those which appear in
 Imenu (`javaimp-imenu-create-index' is responsible for that), but
 with prefix arg, show all scopes."
   (interactive "P")
@@ -818,33 +830,64 @@ with prefix arg, show all scopes."
               (unless show-all
                 (lambda (scope)
                   (javaimp-test-scope-type scope
-                    '(class interface enum method)
+                    `(,@ javaimp--classlike-scope-types method)
                     javaimp--classlike-scope-types)))))))
-        (file buffer-file-name)
+        (source-buf (current-buffer))
+        (source-default-dir default-directory)
         (buf (get-buffer-create "*javaimp-scopes*")))
     (with-current-buffer buf
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (insert (propertize (format "%s\n\n" file)
-                          'javaimp-help-file file))
-      (dolist (scope scopes)
-        (let ((depth 0)
-              (tmp scope))
-          (while (setq tmp (javaimp-scope-parent tmp))
-            (setq depth (1+ depth)))
-          (insert (propertize
-                   (format "%d %s: %s%s\n"
-                           depth
-                           (cdr (assq (javaimp-scope-type scope)
-                                      javaimp--help-scope-type-abbrevs))
-                           (make-string depth ? )
-                           (javaimp-scope-name scope))
-                   'mouse-face 'highlight
-                   'help-echo "mouse-2: go to this scope"
-                   'javaimp-help-scope scope
-                   'keymap javaimp-help-keymap))))
-      (setq buffer-read-only t))
+      (setq default-directory source-default-dir)
+      (javaimp-show-scopes-mode)
+      (let ((inhibit-read-only t)
+            (buffer-undo-list t))
+        (erase-buffer)
+        (insert (propertize (format "%s\n\n" (buffer-file-name source-buf))
+                            'javaimp-show-scopes-file (buffer-file-name source-buf)))
+        (dolist (scope scopes)
+          (let ((depth 0)
+                (tmp scope))
+            (while (setq tmp (javaimp-scope-parent tmp))
+              (setq depth (1+ depth)))
+            (insert (propertize
+                     (format "%5d %2d %s: %s%s"
+                             (with-current-buffer source-buf
+                               (line-number-at-pos (javaimp-scope-start scope)))
+                             depth
+                             (cdr (assq (javaimp-scope-type scope)
+                                        javaimp--show-scopes-scope-type-abbrevs))
+                             (make-string (* 2 depth) ? )
+                             (javaimp-scope-name scope))
+                     'mouse-face 'highlight
+                     'help-echo "mouse-2: go to this scope"
+                     'javaimp-show-scopes-scope scope
+                     'follow-link t)
+                    ?\n)))
+        (insert (format "\nTotal: %d scopes\n" (length scopes)))
+        (goto-char (point-min))
+        (setq next-error-last-buffer buf)
+        (setq buffer-read-only t)
+        (set-buffer-modified-p nil)))
     (display-buffer buf)))
+
+(defun javaimp-show-scopes-next-error (&optional argp reset)
+  "Compatibility function for \\[next-error] invocations."
+  (interactive "p")
+  (or argp (setq argp 1))
+  (when reset
+    (if-let ((pos (next-single-property-change
+                   (point-min) 'javaimp-show-scopes-scope)))
+        (progn
+          (goto-char pos)
+          (forward-line -1))
+      (user-error "No scopes")))
+  (forward-line argp)
+  (unless (get-text-property (point) 'javaimp-show-scopes-scope)
+    (user-error "No more scopes"))
+  ;; In case the buffer is visible in a nonselected window.
+  (if-let ((win (get-buffer-window (current-buffer) t)))
+    (set-window-point win (point)))
+  (javaimp-show-scopes-goto-scope nil))
+
 
 
 ;; Misc

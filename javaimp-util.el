@@ -40,7 +40,7 @@
      array)
    javaimp--classlike-scope-types))
 
-(defconst javaimp--help-scope-type-abbrevs
+(defconst javaimp--show-scopes-scope-type-abbrevs
   '((anonymous-class . "ac")
     (statement . "st")
     (simple-statement . "ss")
