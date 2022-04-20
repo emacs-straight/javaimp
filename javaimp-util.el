@@ -32,7 +32,7 @@
 
 (defconst javaimp--all-scope-types
   (append
-   '(anonymous-class
+   '(anon-class
      array
      method
      simple-statement
@@ -41,7 +41,7 @@
    javaimp--classlike-scope-types))
 
 (defconst javaimp--show-scopes-scope-type-abbrevs
-  '((anonymous-class . "ac")
+  '((anon-class . "ac")
     (statement . "st")
     (simple-statement . "ss")
     (array . "ar")
@@ -152,6 +152,29 @@ left."
                 (setq scope (javaimp-scope-parent scope)))
       (setq res (memq (javaimp-scope-type scope) parent-types)))
     res))
+
+(defun javaimp--defun-scope-pred (&optional additional)
+  "Return predicate which matches scopes in
+`javaimp--classlike-scope-types'.  ADDITIONAL is a list of scope
+types.  If it includes `method', then also method leafs are
+included.  If it includes `anon-class', then also leafs and
+parents may be anonymous classes."
+  (let ((leaf-types (append javaimp--classlike-scope-types
+                            (when (memq 'method additional) '(method))
+                            (when (memq 'anon-class additional) '(anon-class))))
+        (parent-types (append javaimp--classlike-scope-types
+                              (when (memq 'anon-class additional) '(anon-class)))))
+    (lambda (s)
+      (javaimp-test-scope-type s leaf-types parent-types))))
+
+(defun javaimp--scope-same-parent-pred (parent)
+  (if parent
+      (lambda (s)
+        (and (javaimp-scope-parent s)
+             (= (javaimp-scope-open-brace (javaimp-scope-parent s))
+                (javaimp-scope-open-brace parent))))
+    (lambda (s)
+      (not (javaimp-scope-parent s)))))
 
 
 ;; Tree

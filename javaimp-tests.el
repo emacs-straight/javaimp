@@ -102,18 +102,18 @@ extends Bar<? extends Baz<? extends Baz2>> {"
       enum "Foo")
     ))
 
-(ert-deftest javaimp-test--parse-scope-anonymous-class ()
-  (javaimp-test--single-parser #'javaimp--parse-scope-anonymous-class
+(ert-deftest javaimp-test--parse-scope-anon-class ()
+  (javaimp-test--single-parser #'javaimp--parse-scope-anon-class
     '(" = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {"
-      anonymous-class "Object")
+      anon-class "<anon>Object")
     `(,(subst-char-in-string
         ?  ?\n
         " = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {")
-      anonymous-class "Object")
+      anon-class "<anon>Object")
     '(" = (obj.getField()).new Object<Class1, Class2>(1, baz) {"
-      anonymous-class "Object")
+      anon-class "<anon>Object")
     '(" = obj.new Object<>(1, baz) {"
-      anonymous-class "Object")
+      anon-class "<anon>Object")
     ))
 
 (ert-deftest javaimp-test--parse-scope-method-or-stmt ()
@@ -165,7 +165,10 @@ throws E1 {"
   (dolist (item test-items)
     (with-temp-buffer
       (insert (nth 0 item))
-      (let* ((javaimp--parse-scope-hook parser)
+      (let* ((javaimp--parse-scope-hook
+              (lambda (arg)
+                (save-excursion
+                  (funcall parser arg))))
              (scopes (javaimp--parse-get-all-scopes)))
         (should (= 1 (length scopes)))
         (should (eq (javaimp-scope-type (car scopes)) (nth 1 item)))
@@ -230,6 +233,7 @@ import static some_class.fun_2; // comment
 
 (defun javaimp-test--check-named-scopes ()
   (let* ((scopes (javaimp--parse-get-all-scopes
+                  nil nil
                   (lambda (s)
                     (memq (javaimp-scope-type s) '(class interface enum method)))
                   (lambda (s)

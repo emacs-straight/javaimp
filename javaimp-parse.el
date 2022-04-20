@@ -215,9 +215,9 @@ is unchanged."
               (save-excursion
                 (funcall parser arg))))
           '(javaimp--parse-scope-array
-            ;; anonymous-class should be before method/stmt because it
+            ;; anon-class should be before method/stmt because it
             ;; looks similar, but with "new" in front
-            javaimp--parse-scope-anonymous-class
+            javaimp--parse-scope-anon-class
             javaimp--parse-scope-class
             javaimp--parse-scope-simple-stmt
             javaimp--parse-scope-method-or-stmt
@@ -252,10 +252,9 @@ brace.")
                                    (buffer-substring-no-properties
                                     keyword-start keyword-end))
                             :name (javaimp--parse-substr-before-< (caar arglist))
-                            :start keyword-start
-                            :open-brace brace-pos)))))
+                            :start keyword-start)))))
 
-(defun javaimp--parse-scope-simple-stmt (brace-pos)
+(defun javaimp--parse-scope-simple-stmt (_brace-pos)
   "Attempts to parse 'simple-statement' scope."
   (and (javaimp--parse-skip-back-until)
        (or (and (= (char-before (1- (point))) ?-) ; ->
@@ -267,11 +266,10 @@ brace.")
         :name (or (match-string 1)
                   "lambda")
         :start (or (match-beginning 1)
-                   (- (point) 2))
-        :open-brace brace-pos)))
+                   (- (point) 2)))))
 
-(defun javaimp--parse-scope-anonymous-class (brace-pos)
-  "Attempts to parse 'anonymous-class' scope."
+(defun javaimp--parse-scope-anon-class (brace-pos)
+  "Attempts to parse 'anon-class' scope."
   ;; skip arg-list and ws
   (when (and (progn
                  (javaimp--parse-skip-back-until)
@@ -285,10 +283,11 @@ brace.")
           (setq start (match-beginning 0)
                 arglist (javaimp--parse-arglist (match-end 0) end t))
           (when (= (length arglist) 1)
-            (make-javaimp-scope :type 'anonymous-class
-                                :name (javaimp--parse-substr-before-< (caar arglist))
-                                :start start
-                                :open-brace brace-pos))))))
+            (make-javaimp-scope :type 'anon-class
+                                :name
+                                (concat "<anon>"
+                                        (javaimp--parse-substr-before-< (caar arglist)))
+                                :start start))))))
 
 (defun javaimp--parse-scope-method-or-stmt (brace-pos)
   "Attempts to parse 'method' or 'statement' scope."
@@ -332,27 +331,30 @@ brace.")
                                       (cdr arglist-region))))
                            (concat name "(" (mapconcat #'car args ",") ")"))
                        name)
-               :start (point)
-               :open-brace brace-pos))))))))
+               :start (point)))))))))
 
-(defun javaimp--parse-scope-array (brace-pos)
+(defun javaimp--parse-scope-array (_brace-pos)
   "Attempts to parse 'array' scope."
   (and (javaimp--parse-skip-back-until)
        (member (char-before) '(?, ?\]))
        (make-javaimp-scope :type 'array
                            :name ""
-                           :start nil
-                           :open-brace brace-pos)))
+                           :start nil)))
 
 (defun javaimp--parse-scopes (count)
-  "Attempts to parse COUNT enclosing scopes at point.  Returns most
-nested one, with its parents sets accordingly.  If COUNT is nil
-then goes all the way up.  Examines and sets property
-'javaimp-parse-scope' at each scope's open brace.  If neither of
-functions in `javaimp--parse-scope-hook' return non-nil then the
-property value is set to the symbol `unknown'.  Additionally, if
-a scope is recognized, but any of its parents is 'unknown', then
-it's set to 'unknown' too."
+  "Attempts to parse COUNT enclosing scopes at point.
+Returns most nested one, with its parents sets accordingly.  If
+COUNT is nil then goes all the way up.
+
+Examines and sets property 'javaimp-parse-scope' at each scope's
+open brace.  If neither of functions in
+`javaimp--parse-scope-hook' return non-nil then the property
+value is set to the symbol `unknown'.  Additionally, if a scope
+is recognized, but any of its parents is 'unknown', then it's set
+to 'unknown' too.
+
+If point is inside of any comment/string then this function does
+nothing."
   (let ((state (syntax-ppss))
         res)
     (unless (syntax-ppss-context state)
@@ -364,9 +366,11 @@ it's set to 'unknown' too."
         (when (= (char-after) ?{)
           (let ((scope (get-text-property (point) 'javaimp-parse-scope)))
             (unless scope
-              (setq scope (or (run-hook-with-args-until-success
-                               'javaimp--parse-scope-hook (point))
-                              'unknown))
+              (setq scope (run-hook-with-args-until-success
+                           'javaimp--parse-scope-hook (point)))
+              (if scope
+                  (setf (javaimp-scope-open-brace scope) (point))
+                (setq scope 'unknown))
               (put-text-property (point) (1+ (point))
                                  'javaimp-parse-scope scope))
             (push scope res)
@@ -377,6 +381,7 @@ it's set to 'unknown' too."
     (let (parent reset-tail)
       (while res
         (if reset-tail
+            ;; overwrite property value with `unknown'
             (when (javaimp-scope-p (car res))
               (let ((pos (javaimp-scope-open-brace (car res))))
                 (put-text-property pos (1+ pos) 'javaimp-parse-scope 'unknown)))
@@ -391,10 +396,10 @@ it's set to 'unknown' too."
       parent)))
 
 (defun javaimp--parse-all-scopes ()
-  "Entry point to the scope parsing.  Parses scopes in this buffer
-which are after `javaimp--parse-dirty-pos', if it points
-anywhere.  Makes it point nowhere when done."
-  (unless javaimp--parse-dirty-pos
+  "Parses all scopes in this buffer which are after
+`javaimp--parse-dirty-pos', if it points anywhere.  Makes it
+point nowhere when done."
+  (unless javaimp--parse-dirty-pos      ;init on first use
     (setq javaimp--parse-dirty-pos (point-min-marker))
     (javaimp--parse-setup-buffer))
   (when (marker-position javaimp--parse-dirty-pos)
@@ -418,6 +423,29 @@ anywhere.  Makes it point nowhere when done."
   (setq syntax-ppss-table javaimp-syntax-table)
   (setq-local multibyte-syntax-as-symbol t)
   (add-hook 'after-change-functions #'javaimp--parse-update-dirty-pos))
+
+(defun javaimp--parse-enclosing-scope (&optional pred)
+  "Return innermost enclosing scope matching PRED."
+  (with-syntax-table javaimp-syntax-table
+    (let ((state (syntax-ppss)))
+      ;; Move out of any comment/string
+      (when (nth 8 state)
+	(goto-char (nth 8 state))
+	(setq state (syntax-ppss)))
+      (catch 'found
+        (while t
+          (let ((res (save-excursion
+                       (javaimp--parse-scopes nil))))
+            (when (and (javaimp-scope-p res)
+                       (or (null pred)
+                           (funcall pred res)))
+              (throw 'found res))
+            ;; Go up until we get something
+            (if (nth 1 state)
+                (progn
+                  (goto-char (nth 1 state))
+                  (setq state (syntax-ppss)))
+              (throw 'found nil))))))))
 
 (defun javaimp--parse-class-abstract-methods ()
   (goto-char (point-max))
@@ -500,14 +528,21 @@ either of symbols `normal' or 'static'."
     (cons (and start-pos end-pos (cons start-pos end-pos))
           class-alist)))
 
-(defun javaimp--parse-get-all-scopes (&optional pred parent-pred)
-  "Return all scopes in the current buffer, optionally filtering
-them with PRED, and their parents with PARENT-PRED.  Neither of
-them should move point."
+(defun javaimp--parse-get-all-scopes (&optional beg end pred parent-pred)
+  "Return all scopes in the current buffer between positions BEG
+and END, both exclusive, optionally filtering them with PRED, and
+their parents with PARENT-PRED.  Neither of PRED or PARENT-PRED
+should move point.  Note that parents may be outside of region
+given by BEG and END.  BEG is the LIMIT argument to
+`previous-single-property-change', and so may be nil.  END
+defaults to end of accessible portion of the buffer."
   (javaimp--parse-all-scopes)
-  (let ((pos (point-max))
+  (let ((pos (or end (point-max)))
         scope res)
-    (while (setq pos (previous-single-property-change pos 'javaimp-parse-scope))
+    (while (and (setq pos (previous-single-property-change
+                           pos 'javaimp-parse-scope nil beg))
+                (or (not beg)
+                    (/= pos beg)))
       (setq scope (get-text-property pos 'javaimp-parse-scope))
       (when (and (javaimp-scope-p scope)
                  (or (null pred)
@@ -518,17 +553,30 @@ them should move point."
         (push scope res)))
     res))
 
+(defun javaimp--parse-get-enclosing-scope (&optional pred parent-pred)
+  "Return innermost enclosing scope at point, optionally checking
+it with PRED, and its parents with PARENT-PRED."
+  (save-excursion
+    (javaimp--parse-all-scopes))
+  (when-let ((scope (javaimp--parse-enclosing-scope pred)))
+    (setq scope (javaimp--copy-scope scope))
+    (when parent-pred
+      (javaimp--filter-scope-parents scope parent-pred))
+    scope))
+
 (defun javaimp--parse-get-class-abstract-methods ()
   (javaimp--parse-all-scopes)
   (javaimp--parse-class-abstract-methods))
 
 (defun javaimp--parse-get-interface-abstract-methods ()
   (let ((interfaces (javaimp--parse-get-all-scopes
-                     (lambda (scope)
-                       (javaimp-test-scope-type scope
+                     nil nil
+                     (lambda (s)
+                       (javaimp-test-scope-type s
                          '(interface) javaimp--classlike-scope-types)))))
     (seq-mapcat #'javaimp--parse-interface-abstract-methods
                 interfaces)))
+
 
 (defmacro javaimp--parse-without-hook (&rest body)
   "Execute BODY, temporarily removing
