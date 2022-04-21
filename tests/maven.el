@@ -1,4 +1,4 @@
-;;; javaimp-tests-maven.el --- javaimp Maven tests  -*- lexical-binding: t; -*-
+;;; tests/maven.el --- javaimp Maven tests  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2021-2021  Free Software Foundation, Inc.
 
@@ -6,12 +6,10 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
-(require 'javaimp)
+(require 'javaimp-maven)
 (require 'javaimp-tests)
 
-;; Tests for Maven project parsing.
-
-;; "testdata" dir contains some archived Maven projects.  If you need
+;; "data" dir contains some archived Maven projects.  If you need
 ;; to run Maven on them manually, use this in the untarred directory:
 ;;
 ;; `mvn -U -s settings.xml -f <name>/pom.xml help:effective-pom'.
@@ -21,25 +19,37 @@
 ;; `<?xml version="1.0" encoding="UTF-8"?><settings/>'
 ;;
 
-(ert-deftest javaimp-test--maven-visit-single ()
-  :tags '(:runs-build-tool)
-  (javaimp-test--with-data
-   "maven-single.tar.gz"
+(defun javaimp-test-maven--get-tree (project-dir)
+  (javaimp-tree-map-nodes
+   (lambda (mod)
+     (cons t
+           (cons (javaimp-print-id (javaimp-module-id mod))
+                 (file-relative-name (javaimp-module-file mod) project-dir))))
+   #'always
+   (javaimp-maven-visit (concat project-dir "pom.xml"))))
+
+
+(ert-deftest javaimp-maven-visit-single ()
+  :tags '(:expensive)
+  (javaimp-call-with-data
+   (file-name-concat
+    javaimp-basedir "tests" "data" "maven-single.tar.gz")
    (lambda (tmpdir)
      (should
       (equal
-       (javaimp-test--maven-get-tree
+       (javaimp-test-maven--get-tree
         (concat tmpdir (file-name-as-directory "single")))
        '((("single:org.example:1.0.0" . "pom.xml"))))))))
 
-(ert-deftest javaimp-test--maven-visit-multi ()
-  :tags '(:runs-build-tool)
-  (javaimp-test--with-data
-   "maven-multi.tar.gz"
+(ert-deftest javaimp-maven-visit-multi ()
+  :tags '(:expensive)
+  (javaimp-call-with-data
+   (file-name-concat
+    javaimp-basedir "tests" "data" "maven-multi.tar.gz")
    (lambda (tmpdir)
      (should
       (equal
-       (javaimp-test--maven-get-tree
+       (javaimp-test-maven--get-tree
         (concat tmpdir (file-name-as-directory "multi")))
        '(;; Main tree:
          (("multi:org.example:1.0.0" . "pom.xml")
@@ -69,14 +79,3 @@
          ;; And "dangling-parent-link" project is not present at all,
          ;; because we have no way of knowing about it
          ))))))
-
-(defun javaimp-test--maven-get-tree (project-dir)
-  (javaimp--map-nodes
-   (lambda (mod)
-     (cons t
-           (cons (javaimp-print-id (javaimp-module-id mod))
-                 (file-relative-name (javaimp-module-file mod) project-dir))))
-   #'always
-   (javaimp--maven-visit (concat project-dir "pom.xml"))))
-
-(provide 'javaimp-tests-maven)

@@ -58,7 +58,7 @@
 ;; (setq javaimp-project forest nil)
 ;;
 ;; Project structure and dependency information is retrieved from the
-;; build tool, see `javaimp--maven-visit' and `javaimp--gradle-visit',
+;; build tool, see `javaimp-maven-visit' and `javaimp-gradle-visit',
 ;; and the `javaimp-handler-regexp-alist' variable.  The output from
 ;; the build tool can be inspected in buffer named by
 ;; `javaimp-tool-output-buf-name' variable.  If there exists
@@ -136,11 +136,11 @@
 
 ;;; Code:
 
+(require 'javaimp-util)
 (require 'javaimp-maven)
 (require 'javaimp-gradle)
 (require 'javaimp-parse)
-(require 'javaimp-util)
-(require 'cc-mode)                      ;for java-mode-syntax-table
+
 (require 'imenu)
 
 
@@ -169,15 +169,6 @@ The order of classes which were not matched is defined by
   "Defines the order of classes which were not matched by
 `javaimp-import-group-alist'"
   :type 'integer)
-
-(defcustom javaimp-java-home
-  (let ((val (getenv "JAVA_HOME")))
-    (and val (not (string-blank-p val))
-         val))
-  "Path to the JDK.  The directory given should contain
-subdirectory \"jre/lib\" (pre-JDK9) or just \"lib\".  By default,
-it is initialized from the JAVA_HOME environment variable."
-  :type 'string)
 
 (defcustom javaimp-additional-source-dirs nil
   "List of directories where additional (e.g. generated)
@@ -220,28 +211,13 @@ class)."
   "Path to the `jmod' program used to read contents of jmod files."
   :type 'string)
 
-(defcustom javaimp-cygpath-program
-  (if (eq system-type 'cygwin) "cygpath")
-  "Path to the `cygpath' program (Cygwin only)."
-  :type 'string)
-
-(defcustom javaimp-mvn-program "mvn"
-  "Path to the `mvn' program.  If the visited project has local
-mvnw (Maven wrapper), it is used in preference."
-  :type 'string)
-
-(defcustom javaimp-gradle-program "gradle"
-  "Path to the `gradle' program.  If the visited project has local
-gradlew (Gradle wrapper), it is used in preference."
-  :type 'string)
-
 
 
 ;; Variables
 
 (defvar javaimp-handler-regexp-alist
-  `(("\\`build.gradle" . ,#'javaimp--gradle-visit)
-    ("\\`pom.xml\\'" . ,#'javaimp--maven-visit))
+  `(("\\`build.gradle" . ,#'javaimp-gradle-visit)
+    ("\\`pom.xml\\'" . ,#'javaimp-maven-visit))
   "Alist of file name patterns vs corresponding handler function.
 A handler function takes one argument, a FILE.")
 
@@ -258,18 +234,6 @@ struct.")
 is expanded file name and CACHED-FILE is javaimp-cached-file
 struct.")
 
-(defvar javaimp-syntax-table
-  (make-syntax-table java-mode-syntax-table) ;TODO don't depend on cc-mode
-  "Javaimp syntax table")
-
-(defvar javaimp--arglist-syntax-table
-  (let ((st (make-syntax-table javaimp-syntax-table)))
-    (modify-syntax-entry ?< "(>" st)
-    (modify-syntax-entry ?> ")<" st)
-    (modify-syntax-entry ?. "_" st) ; separates parts of fully-qualified type
-    st)
-  "Enables parsing angle brackets as lists")
-
 (defconst javaimp--jar-error-header
   "There were errors when reading some of the dependency files,
 they are listed below.
@@ -285,6 +249,16 @@ For more info, see
 https://docs.gradle.org/current/userguide/java_library_plugin.html\
 #sec:java_library_classes_usage
 ")
+
+(defconst javaimp-show-scopes-type-abbrevs
+  '((anon-class . "ac")
+    (statement . "st")
+    (simple-statement . "ss")
+    (array . "ar")
+    (method . "me")
+    (class . "cl")
+    (interface . "in")
+    (enum . "en")))
 
 
 ;;;###autoload
@@ -423,15 +397,15 @@ output."
 (defun javaimp-find-module (predicate)
   "Returns first module in `javaimp-project-forest' for which
 PREDICATE returns non-nil."
-  (javaimp--find-node predicate javaimp-project-forest t))
+  (javaimp-tree-find-node predicate javaimp-project-forest t))
 
 (defun javaimp-collect-modules (predicate)
   "Returns all modules in `javaimp-project-forest' for which
 PREDICATE returns non-nil."
-  (javaimp--collect-nodes predicate javaimp-project-forest))
+  (javaimp-tree-collect-nodes predicate javaimp-project-forest))
 
 (defun javaimp-map-modules (function)
-  (javaimp--map-nodes function #'always javaimp-project-forest))
+  (javaimp-tree-map-nodes function #'always javaimp-project-forest))
 
 
 ;;; Adding imports
@@ -458,7 +432,7 @@ current module or source tree, see
   (interactive
    (let* ((file (expand-file-name (or buffer-file-name
 				      (error "Buffer is not visiting a file!"))))
-	  (node (javaimp--find-node
+	  (node (javaimp-tree-find-node
 		 (lambda (m)
                    (seq-some (lambda (dir)
                                (string-prefix-p dir file))
@@ -544,7 +518,7 @@ If there's no such directive, then the last resort is just
      (if-let ((package (save-excursion
                          (save-restriction
                            (widen)
-                           (javaimp--parse-get-package)))))
+                           (javaimp-parse-get-package)))))
          (string-remove-suffix
           (mapconcat #'file-name-as-directory (split-string package "\\." t) nil)
           default-directory)
@@ -577,22 +551,22 @@ If there's no such directive, then the last resort is just
     (insert-file-contents file)
     ;; We need only class-likes, and this is temp buffer, so for
     ;; efficiency avoid parsing anything else
-    (let ((javaimp--parse-scope-hook #'javaimp--parse-scope-class))
+    (let ((javaimp-parse--scope-hook #'javaimp-parse--scope-class))
       (javaimp--get-buffer-classes))))
 
 (defun javaimp--get-buffer-classes ()
   "Return fully-qualified names of all class-like scopes in the
 current buffer.  Anonymous classes are not included."
-  (let ((package (javaimp--parse-get-package))
-        (scopes (javaimp--parse-get-all-scopes
-                 nil nil (javaimp--defun-scope-pred))))
+  (let ((package (javaimp-parse-get-package))
+        (scopes (javaimp-parse-get-all-scopes
+                 nil nil (javaimp-scope-defun-p))))
     (mapcar (lambda (class)
               (if package
                   (concat package "." class)
                 class))
             (mapcar (lambda (scope)
                       (let ((name (javaimp-scope-name scope))
-                            (parent-names (javaimp--concat-scope-parents scope)))
+                            (parent-names (javaimp-scope-concat-parents scope)))
                         (if (string-empty-p parent-names)
                             name
                           (concat parent-names "." name))))
@@ -620,15 +594,15 @@ are assigned a default order defined by
 
 Additionally, merge imports from ADD-ALIST, an alist of the same
 form as CLASS-ALIST in return value of
-`javaimp--parse-get-imports'."
+`javaimp-parse-get-imports'."
   (interactive)
   (barf-if-buffer-read-only)
   (save-excursion
     (save-restriction
       (widen)
-      (let ((parsed (javaimp--parse-get-imports)))
+      (let ((parsed (javaimp-parse-get-imports)))
         (when (or (cdr parsed) add-alist)
-          (javaimp--parse-without-hook
+          (javaimp-parse-without-hook
             (javaimp--position-for-insert-imports (car parsed))
             (let ((with-order
 		   (mapcar
@@ -664,7 +638,7 @@ form as CLASS-ALIST in return value of
       (progn
         (delete-region (car old-region) (cdr old-region))
         (goto-char (car old-region)))
-    (if (javaimp--parse-get-package)
+    (if (javaimp-parse-get-package)
         (insert "\n\n")
       ;; As a last resort, go to bob and skip comments
       (goto-char (point-min))
@@ -689,13 +663,22 @@ form as CLASS-ALIST in return value of
 
 ;; Imenu support
 
+(defsubst javaimp-imenu--make-entry (scope)
+  (list (javaimp-scope-name scope)
+        (if imenu-use-markers
+            (copy-marker (javaimp-scope-start scope))
+          (javaimp-scope-start scope))
+        #'javaimp-imenu--function
+        scope))
+
+
 ;;;###autoload
 (defun javaimp-imenu-create-index ()
   "Function to use as `imenu-create-index-function', can be set
 in a major mode hook."
   (let ((forest (javaimp-imenu--get-forest)))
     (if javaimp-imenu-use-sub-alists
-        (javaimp--map-nodes
+        (javaimp-tree-map-nodes
          (lambda (scope)
            (if (eq (javaimp-scope-type scope) 'method)
                ;; entry
@@ -709,7 +692,7 @@ in a major mode hook."
       (let ((entries
              (mapcar #'javaimp-imenu--make-entry
                      (seq-sort-by #'javaimp-scope-start #'<
-                                  (javaimp--collect-nodes
+                                  (javaimp-tree-collect-nodes
                                    (lambda (scope)
                                      (eq (javaimp-scope-type scope) 'method))
                                    forest))))
@@ -724,14 +707,14 @@ in a major mode hook."
                   (setcar entry
                           (format "%s [%s]"
                                   (car entry)
-                                  (javaimp--concat-scope-parents
+                                  (javaimp-scope-concat-parents
                                    (nth 3 entry))))))
               entries)))))
 
 (defun javaimp-imenu--get-forest ()
   (let* ((defun-scopes
-          (javaimp--parse-get-all-scopes
-           nil nil (javaimp--defun-scope-pred '(method))))
+          (javaimp-parse-get-all-scopes
+           nil nil (javaimp-scope-defun-p '(method))))
          (methods (seq-filter
                    (lambda (scope)
                      (eq (javaimp-scope-type scope) 'method))
@@ -744,35 +727,28 @@ in a major mode hook."
                                     (null (javaimp-scope-parent s)))
                                   classes))
          (abstract-methods (append
-                            (javaimp--parse-get-class-abstract-methods)
-                            (javaimp--parse-get-interface-abstract-methods))))
+                            (javaimp-parse-get-class-abstract-methods)
+                            (javaimp-parse-get-interface-abstract-methods))))
     (mapcar
      (lambda (top-class)
        (message "Building tree for top-level class-like scope: %s"
                 (javaimp-scope-name top-class))
-       (javaimp--build-tree top-class
-                            (append methods
-                                    classes
-                                    abstract-methods)
-                            (lambda (el tested)
-                              (equal el (javaimp-scope-parent tested)))
-                            nil
-                            (lambda (s1 s2)
-                              (< (javaimp-scope-start s1)
-                                 (javaimp-scope-start s2)))))
+       (javaimp-tree-build top-class
+                           (append methods
+                                   classes
+                                   abstract-methods)
+                           (lambda (el tested)
+                             (equal el (javaimp-scope-parent tested)))
+                           nil
+                           (lambda (s1 s2)
+                             (< (javaimp-scope-start s1)
+                                (javaimp-scope-start s2)))))
      top-classes)))
-
-(defsubst javaimp-imenu--make-entry (scope)
-  (list (javaimp-scope-name scope)
-        (if imenu-use-markers
-            (copy-marker (javaimp-scope-start scope))
-          (javaimp-scope-start scope))
-        #'javaimp-imenu--function
-        scope))
 
 (defun javaimp-imenu--function (_index-name index-position _scope)
   (goto-char index-position)
   (back-to-indentation))
+
 
 
 ;; Show scopes
@@ -829,8 +805,8 @@ opening brace."
          (save-excursion
            (save-restriction
              (widen)
-             (javaimp--parse-get-all-scopes
-              nil nil (javaimp--defun-scope-pred '(method anon-class))))))
+             (javaimp-parse-get-all-scopes
+              nil nil (javaimp-scope-defun-p '(method anon-class))))))
         (source-buf (current-buffer))
         (source-default-dir default-directory)
         (buf (get-buffer-create "*javaimp-scopes*")))
@@ -853,7 +829,7 @@ opening brace."
                                (line-number-at-pos (javaimp-scope-start scope)))
                              depth
                              (cdr (assq (javaimp-scope-type scope)
-                                        javaimp--show-scopes-scope-type-abbrevs))
+                                        javaimp-show-scopes-type-abbrevs))
                              (make-string (* 2 depth) ? )
                              (javaimp-scope-name scope))
                      'mouse-face 'highlight
@@ -928,8 +904,8 @@ after this group of defuns."
     (save-restriction
       (widen)
       (let* ((pos (point))
-             (defun-pred (javaimp--defun-scope-pred '(method anon-class)))
-             (enc (javaimp--parse-get-enclosing-scope defun-pred))
+             (defun-pred (javaimp-scope-defun-p '(method anon-class)))
+             (enc (javaimp-parse-get-enclosing-scope defun-pred))
              (parent
               (if (and enc (eq (javaimp-scope-type enc) 'method))
                   ;; We're inside a method, and need to look at
@@ -945,9 +921,9 @@ after this group of defuns."
                               (ignore-errors
                                 (scan-lists
                                  (javaimp-scope-open-brace parent) 1 0))))
-             (sibling-pred (javaimp--scope-same-parent-pred parent))
+             (sibling-pred (javaimp-scope-same-parent-p parent))
              (siblings
-              (javaimp--parse-get-all-scopes
+              (javaimp-parse-get-all-scopes
                ;; beg/end are not strictly needed, pred is enough, but
                ;; provide them for effectiveness
                parent-beg parent-end

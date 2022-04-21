@@ -20,30 +20,37 @@
 
 (require 'javaimp-util)
 
-(defun javaimp--gradle-visit (file)
+(defcustom javaimp-gradle-program "gradle"
+  "Path to the `gradle' program.  If the visited project has local
+gradlew (Gradle wrapper), it is used in preference."
+  :type 'string
+  :group 'javaimp)
+
+
+(defun javaimp-gradle-visit (file)
   "Calls gradle on FILE to get various project information.
 
 Passes specially crafted init file as -I argument to gradle and
 invokes task contained in it.  This task outputs all needed
 information."
   (message "Visiting Gradle build file %s..." file)
-  (let* ((alists (javaimp--gradle-call file #'javaimp--gradle-handler))
+  (let* ((alists (javaimp-gradle--call file #'javaimp-gradle--handler))
          (modules (mapcar (lambda (alist)
-                            (javaimp--gradle-module-from-alist alist file))
+                            (javaimp-gradle--module-from-alist alist file))
                           alists)))
     ;; first module is always root
     (message "Building tree for root: %s"
              (javaimp-print-id (javaimp-module-id (car modules))))
     (list
-     (javaimp--build-tree (car modules) modules
-	                  ;; more or less reliable way to find children
-	                  ;; is to look for modules with "this" as the
-	                  ;; parent
-                          (lambda (el tested)
-                            (equal (javaimp-module-parent-id tested)
-                                   (javaimp-module-id el)))))))
+     (javaimp-tree-build (car modules) modules
+	                 ;; more or less reliable way to find children
+	                 ;; is to look for modules with "this" as the
+	                 ;; parent
+                         (lambda (el tested)
+                           (equal (javaimp-module-parent-id tested)
+                                  (javaimp-module-id el)))))))
 
-(defun javaimp--gradle-handler ()
+(defun javaimp-gradle--handler ()
   "Parse current buffer into list of project descriptors, each of
 which is an alist of attributes (NAME . VALUE).  Each attribute
 occupies one line, and is of the form 'NAME=VALUE'.  See file
@@ -65,12 +72,12 @@ descriptor."
       (push alist res))
     (nreverse res)))
 
-(defun javaimp--gradle-module-from-alist (alist file-orig)
+(defun javaimp-gradle--module-from-alist (alist file-orig)
   "Make `javaimp-module' structure out of attribute alist ALIST."
   (make-javaimp-module
-   :id (javaimp--gradle-id-from-semi-separated
+   :id (javaimp-gradle--id-from-semi-separated
         (cdr (assq 'id alist)))
-   :parent-id (javaimp--gradle-id-from-semi-separated
+   :parent-id (javaimp-gradle--id-from-semi-separated
                (cdr (assq 'parent-id alist)))
    :file (cdr (assq 'file alist))
    :file-orig file-orig
@@ -87,10 +94,10 @@ descriptor."
                 (cdr (assq 'build-dir alist))))
    :dep-jars (javaimp--split-native-path (cdr (assq 'dep-jars alist)))
    :load-ts (current-time)
-   :dep-jars-fetcher #'javaimp--gradle-fetch-dep-jars
+   :dep-jars-fetcher #'javaimp-gradle--fetch-dep-jars
    :raw nil))
 
-(defun javaimp--gradle-id-from-semi-separated (str)
+(defun javaimp-gradle--id-from-semi-separated (str)
   (when str
     (let ((parts (split-string str ";" t))
           artifact)
@@ -106,8 +113,8 @@ descriptor."
                        :artifact artifact
                        :version (nth 2 parts)))))
 
-(defun javaimp--gradle-fetch-dep-jars (module ids)
-  (javaimp--gradle-call
+(defun javaimp-gradle--fetch-dep-jars (module ids)
+  (javaimp-gradle--call
    ;; Always invoke on orig file (which is root build script) because
    ;; module's own file may not exist, even if reported by Gradle as
    ;; project.buildFile.  Furthermore, we use that file's directory to
@@ -120,7 +127,7 @@ descriptor."
      (unless (string-empty-p mod-path)
        (format ":%s:" mod-path)))))
 
-(defun javaimp--gradle-call (file handler &optional mod-path)
+(defun javaimp-gradle--call (file handler &optional mod-path)
   (let* (;; There is (was) "-b" switch for specifying build file,
          ;; however it became deprecated in Gradle 7, so we try to run
          ;; in build file directory.
@@ -142,7 +149,7 @@ descriptor."
      "-Dorg.gradle.java.compile-classpath-packaging=true"
      "-I" (javaimp-cygpath-convert-maybe
            (expand-file-name "javaimp-init-script.gradle"
-                             (concat javaimp--basedir
+                             (concat javaimp-basedir
                                      (file-name-as-directory "support"))))
      (concat mod-path "javaimpTask"))))
 

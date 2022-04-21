@@ -21,34 +21,27 @@
 
 ;;; Code:
 
-(require 'xml)
 (require 'cl-lib)
 (require 'seq)
+(require 'xml)
 
-(defconst javaimp--basedir (file-name-directory load-file-name))
+(defconst javaimp-basedir (file-name-directory load-file-name))
 
-(defconst javaimp--classlike-scope-types
-  '(class interface enum))
+(defcustom javaimp-java-home
+  (let ((val (getenv "JAVA_HOME")))
+    (and val (not (string-blank-p val))
+         val))
+  "Path to the JDK.  The directory given should contain
+subdirectory \"jre/lib\" (pre-JDK9) or just \"lib\".  By default,
+it is initialized from the JAVA_HOME environment variable."
+  :type 'string
+  :group 'javaimp)
 
-(defconst javaimp--all-scope-types
-  (append
-   '(anon-class
-     array
-     method
-     simple-statement
-     statement
-     array)
-   javaimp--classlike-scope-types))
-
-(defconst javaimp--show-scopes-scope-type-abbrevs
-  '((anon-class . "ac")
-    (statement . "st")
-    (simple-statement . "ss")
-    (array . "ar")
-    (method . "me")
-    (class . "cl")
-    (interface . "in")
-    (enum . "en")))
+(defcustom javaimp-cygpath-program
+  (if (eq system-type 'cygwin) "cygpath")
+  "Path to the `cygpath' program (Cygwin only)."
+  :type 'string
+  :group 'javaimp)
 
 (defvar javaimp-tool-output-buf-name "*javaimp-tool-output*"
   "Name of the buffer to which `javaimp--call-build-tool' copies
@@ -83,12 +76,6 @@ build tool output.  Can be let-bound to nil to suppress copying.")
 (cl-defstruct javaimp-cached-file
   file read-ts classes)
 
-(cl-defstruct javaimp-scope
-  type                                  ; see javaimp--all-scope-types
-  name
-  start
-  open-brace
-  parent)
 
 (defsubst javaimp-print-id (id)
   (format "%s:%s:%s"
@@ -99,87 +86,26 @@ build tool output.  Can be let-bound to nil to suppress copying.")
 
 ;; Xml
 
-(defun javaimp--xml-children (xml-tree child-name)
+(defun javaimp-xml-children (xml-tree child-name)
   "Returns list of children of XML-TREE filtered by CHILD-NAME"
   (seq-filter (lambda (child)
 		(and (consp child)
 		     (eq (car child) child-name)))
 	      (cddr xml-tree)))
 
-(defun javaimp--xml-child (name el)
+(defun javaimp-xml-child (name el)
   "Returns a child of EL named by symbol NAME"
   (assq name (cddr el)))
 
-(defun javaimp--xml-first-child (el)
+(defun javaimp-xml-first-child (el)
   "Returns a first child of EL"
   (car (cddr el)))
 
 
 
-;; Scopes
-
-(defun javaimp--copy-scope (scope)
-  "Recursively copies SCOPE and its parents."
-  (let* ((res (copy-javaimp-scope scope))
-         (tmp res)
-         orig-parent)
-    (while (setq orig-parent (javaimp-scope-parent tmp))
-      (setf (javaimp-scope-parent tmp) (copy-javaimp-scope orig-parent))
-      (setq tmp (javaimp-scope-parent tmp)))
-    res))
-
-(defun javaimp--filter-scope-parents (scope pred)
-  "Rewrite SCOPE's parents so that only those matching PRED are
-left."
-  (while scope
-    (let ((parent (javaimp-scope-parent scope)))
-      (if (and parent
-               (not (funcall pred parent)))
-          ;; leave out this parent
-          (setf (javaimp-scope-parent scope) (javaimp-scope-parent parent))
-        (setq scope (javaimp-scope-parent scope))))))
-
-(defun javaimp--concat-scope-parents (scope)
-  (let (parents)
-    (while (setq scope (javaimp-scope-parent scope))
-      (push scope parents))
-    (mapconcat #'javaimp-scope-name parents ".")))
-
-(defsubst javaimp-test-scope-type (scope leaf-types parent-types)
-  (declare (indent 1))
-  (let ((res (memq (javaimp-scope-type scope) leaf-types)))
-    (while (and res
-                (setq scope (javaimp-scope-parent scope)))
-      (setq res (memq (javaimp-scope-type scope) parent-types)))
-    res))
-
-(defun javaimp--defun-scope-pred (&optional additional)
-  "Return predicate which matches scopes in
-`javaimp--classlike-scope-types'.  ADDITIONAL is a list of scope
-types.  If it includes `method', then also method leafs are
-included.  If it includes `anon-class', then also leafs and
-parents may be anonymous classes."
-  (let ((leaf-types (append javaimp--classlike-scope-types
-                            (when (memq 'method additional) '(method))
-                            (when (memq 'anon-class additional) '(anon-class))))
-        (parent-types (append javaimp--classlike-scope-types
-                              (when (memq 'anon-class additional) '(anon-class)))))
-    (lambda (s)
-      (javaimp-test-scope-type s leaf-types parent-types))))
-
-(defun javaimp--scope-same-parent-pred (parent)
-  (if parent
-      (lambda (s)
-        (and (javaimp-scope-parent s)
-             (= (javaimp-scope-open-brace (javaimp-scope-parent s))
-                (javaimp-scope-open-brace parent))))
-    (lambda (s)
-      (not (javaimp-scope-parent s)))))
-
-
 ;; Tree
 
-(defun javaimp--build-tree (this all child-p &optional parent-node sort-pred)
+(defun javaimp-tree-build (this all child-p &optional parent-node sort-pred)
   "Recursively builds tree for element THIS and its children.
 Children are those elements from ALL for which CHILD-P invoked
 with this element and tested element returns non-nil.  Children
@@ -195,20 +121,21 @@ recursive calls."
 		       :contents this))
 	   (child-nodes
 	    (mapcar (lambda (child)
-		      (javaimp--build-tree
+		      (javaimp-tree-build
                        child all child-p this-node sort-pred))
 		    children)))
       (setf (javaimp-node-children this-node) child-nodes)
       this-node)))
 
-(defun javaimp--find-node (contents-pred forest &optional unwrap)
+
+(defun javaimp-tree-find-node (contents-pred forest &optional unwrap)
   "Return first node for which CONTENTS-PRED returns non-nil.  If
 UNWRAP is non-nil, then node contents is returned."
   (catch 'found
     (dolist (tree forest)
-      (javaimp--find-node-in-tree tree contents-pred unwrap))))
+      (javaimp-tree--find-node-1 tree contents-pred unwrap))))
 
-(defun javaimp--find-node-in-tree (tree contents-pred unwrap)
+(defun javaimp-tree--find-node-1 (tree contents-pred unwrap)
   (when tree
     (if (funcall contents-pred (javaimp-node-contents tree))
 	(throw 'found
@@ -216,30 +143,30 @@ UNWRAP is non-nil, then node contents is returned."
                    (javaimp-node-contents tree)
                  tree)))
     (dolist (child (javaimp-node-children tree))
-      (javaimp--find-node-in-tree child contents-pred unwrap))))
+      (javaimp-tree--find-node-1 child contents-pred unwrap))))
 
 
-(defun javaimp--collect-nodes (contents-pred forest)
+(defun javaimp-tree-collect-nodes (contents-pred forest)
   "Return all nodes' contents for which CONTENTS-PRED returns
 non-nil."
   (apply #'seq-concatenate 'list
 	 (mapcar (lambda (tree)
                    (delq nil
-		         (javaimp--collect-nodes-from-tree tree contents-pred)))
+		         (javaimp-tree--collect-nodes-1 tree contents-pred)))
 		 forest)))
 
-(defun javaimp--collect-nodes-from-tree (tree contents-pred)
+(defun javaimp-tree--collect-nodes-1 (tree contents-pred)
   (when tree
     (cons (and (funcall contents-pred (javaimp-node-contents tree))
                (javaimp-node-contents tree))
 	  (apply #'seq-concatenate 'list
 		 (mapcar (lambda (child)
                            (delq nil
-			         (javaimp--collect-nodes-from-tree child contents-pred)))
+			         (javaimp-tree--collect-nodes-1 child contents-pred)))
 			 (javaimp-node-children tree))))))
 
 
-(defun javaimp--map-nodes (function pred forest)
+(defun javaimp-tree-map-nodes (function pred forest)
   "Recursively applies FUNCTION to each node's contents in FOREST
 and returns new tree.  FUNCTION should return (t . VALUE) if the
 result for this node should be made a list of the form (VALUE
@@ -248,10 +175,10 @@ this case children are discarded).  The result for each node is
 additionally tested by PRED."
   (delq nil
         (mapcar (lambda (tree)
-                  (javaimp--map-nodes-from-tree tree function pred))
+                  (javaimp-tree--map-nodes-1 tree function pred))
                 forest)))
 
-(defun javaimp--map-nodes-from-tree (tree function pred)
+(defun javaimp-tree--map-nodes-1 (tree function pred)
   (when tree
     (let* ((cell (funcall function (javaimp-node-contents tree)))
            (res
@@ -259,7 +186,7 @@ additionally tested by PRED."
                 (let ((children
                        (delq nil
                              (mapcar (lambda (child)
-                                       (javaimp--map-nodes-from-tree
+                                       (javaimp-tree--map-nodes-1
                                         child function pred))
                                      (javaimp-node-children tree)))))
                   (cons (cdr cell) children))
@@ -267,14 +194,9 @@ additionally tested by PRED."
       (and (funcall pred res)
            res))))
 
-(defun javaimp--get-root (node)
-  (while (javaimp-node-parent node)
-    (setq node (javaimp-node-parent node)))
-  node)
-
 
 
-;; Files & caches
+;; Misc
 
 (defsubst javaimp--get-file-ts (file)
   (nth 5 (file-attributes file)))
@@ -306,9 +228,6 @@ error, the cache for FILE is cleared."
      (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=) nil)
      (signal (car err) (cdr err)))))
 
-
-
-;; System
 
 ;; TODO use functions `cygwin-convert-file-name-from-windows' and
 ;; `cygwin-convert-file-name-to-windows' when they are available
