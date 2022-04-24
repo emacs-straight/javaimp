@@ -122,15 +122,15 @@ resulting module trees."
                               (javaimp-xml-child 'finalName build-elt))
                              "." packaging)))
      :source-dirs (list (file-name-as-directory
-		         (javaimp-cygpath-convert-maybe
+		         (javaimp-cygpath-convert-file-name
 		          (javaimp-xml-first-child
 		           (javaimp-xml-child 'sourceDirectory build-elt))))
                         (file-name-as-directory
-		         (javaimp-cygpath-convert-maybe
+		         (javaimp-cygpath-convert-file-name
 			  (javaimp-xml-first-child
 			   (javaimp-xml-child 'testSourceDirectory build-elt)))))
      :build-dir (file-name-as-directory
-		 (javaimp-cygpath-convert-maybe
+		 (javaimp-cygpath-convert-file-name
 		  (javaimp-xml-first-child (javaimp-xml-child 'directory build-elt))))
      :dep-jars nil          ; dep-jars is initialized lazily on demand
      :load-ts (current-time)
@@ -201,7 +201,7 @@ are somewhat arbitrary."
    (lambda ()
      (search-forward "Dependencies classpath:")
      (forward-line 1)
-     (javaimp--split-native-path (thing-at-point 'line)))
+     (javaimp-split-native-path (thing-at-point 'line)))
    "dependency:build-classpath"
    ;; Invoke in original file's directory because there may be local
    ;; build tool wrapper.
@@ -216,10 +216,10 @@ are somewhat arbitrary."
          (program (if (file-exists-p local-mvnw)
                       (concat default-directory local-mvnw)
                     javaimp-mvn-program)))
-    (javaimp--call-build-tool
+    (javaimp-call-build-tool
      program
      handler
-     "-f" (javaimp-cygpath-convert-maybe file)
+     "-f" (javaimp-cygpath-convert-file-name file)
      task)))
 
 (provide 'javaimp-maven)

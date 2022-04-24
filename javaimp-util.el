@@ -44,7 +44,7 @@ it is initialized from the JAVA_HOME environment variable."
   :group 'javaimp)
 
 (defvar javaimp-tool-output-buf-name "*javaimp-tool-output*"
-  "Name of the buffer to which `javaimp--call-build-tool' copies
+  "Name of the buffer to which `javaimp-call-build-tool' copies
 build tool output.  Can be let-bound to nil to suppress copying.")
 
 
@@ -196,64 +196,34 @@ additionally tested by PRED."
 
 
 
-;; Misc
-
-(defsubst javaimp--get-file-ts (file)
-  (nth 5 (file-attributes file)))
-
-(defun javaimp--get-file-classes-cached (file cache-sym class-reader)
-  "Return list of classes for FILE.  Use CACHE-SYM as a cache, it
-should be an alist with elements of the form (FILE
-. CACHED-FILE).  If not found in cache, or the cache is outdated,
-then classes are read using CLASS-READER, which should be a
-function of one argument, a FILE.  If that function throws an
-error, the cache for FILE is cleared."
-  (condition-case err
-      (let ((cached-file
-             (alist-get file (symbol-value cache-sym) nil nil #'string=)))
-        (when (or (not cached-file)
-                  ;; If the file doesn't exist this will be current
-                  ;; time, and thus condition always true
-                  (> (float-time (javaimp--get-file-ts file))
-	             (float-time (javaimp-cached-file-read-ts cached-file))))
-          (setq cached-file (make-javaimp-cached-file
-		             :file file
-		             :read-ts (javaimp--get-file-ts file)
-		             :classes (funcall class-reader file))))
-        (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=)
-              cached-file)
-        (javaimp-cached-file-classes cached-file))
-    (t
-     ;; Clear on any error
-     (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=) nil)
-     (signal (car err) (cdr err)))))
-
+;; System
 
 ;; TODO use functions `cygwin-convert-file-name-from-windows' and
 ;; `cygwin-convert-file-name-to-windows' when they are available
 ;; instead of calling `cygpath'.  See
 ;; https://cygwin.com/ml/cygwin/2013-03/msg00228.html
 
-(defun javaimp-cygpath-convert-maybe (path &optional mode is-really-path)
-  "On Cygwin, converts PATH using cygpath according to MODE and
-IS-REALLY-PATH.  If MODE is `unix' (the default), adds -u switch.
-If MODE is `windows', adds -m switch.  If `is-really-path' is
-non-nil, adds `-p' switch.  On other systems, PATH is returned
-unchanged."
-  (if (and path (eq system-type 'cygwin))
+(defun javaimp-cygpath-convert-file-name (filename &optional mode is-path)
+  "On Cygwin, converts FILENAME using `cygpath' program according
+to MODE.  If MODE is `unix' (the default), adds `-u' switch.  If
+MODE is `windows', adds `-m' switch.  If IS-PATH is
+non-nil, adds `-p' switch.  On non-Cygwin systems just returns
+the FILENAME unchanged."
+  (or mode (setq mode 'unix))
+  (if (and filename (eq system-type 'cygwin))
       (progn
-	(unless mode (setq mode 'unix))
 	(let (args)
 	  (push (cond ((eq mode 'unix) "-u")
 		      ((eq mode 'windows) "-m")
 		      (t (error "Invalid mode: %s" mode)))
 		args)
-	  (and is-really-path (push "-p" args))
-	  (push path args)
+	  (when is-path
+            (push "-p" args))
+	  (push filename args)
 	  (car (apply #'process-lines javaimp-cygpath-program args))))
-    path))
+    filename))
 
-(defun javaimp--call-build-tool (program handler &rest args)
+(defun javaimp-call-build-tool (program handler &rest args)
   "Run PROGRAM with ARGS, then call HANDLER in the temporary buffer
 with point set to eob and return its result."
   (message "Calling: %s %s" program (string-join args " "))
@@ -282,11 +252,11 @@ with point set to eob and return its result."
       (goto-char (point-min))
       (funcall handler))))
 
-(defun javaimp--split-native-path (path)
+(defun javaimp-split-native-path (path)
   (when path
     ;; don't use parse-colon-path because it makes resulting elements
     ;; to be directories
-    (split-string (javaimp-cygpath-convert-maybe path 'unix t)
+    (split-string (javaimp-cygpath-convert-file-name path 'unix t)
                   (concat "[" path-separator "\n]+")
                   t)))
 

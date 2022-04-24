@@ -313,6 +313,9 @@ any module's source file."
 
 ;; Dependencies
 
+(defsubst javaimp--get-file-ts (file)
+  (nth 5 (file-attributes file)))
+
 (defun javaimp--update-module-maybe (node)
   (let ((module (javaimp-node-contents node))
 	need-update ids)
@@ -359,13 +362,13 @@ contained in it as a list."
     (unless (member ext '("jar" "jmod"))
       (error "Unexpected file name: %s" file))
     (let ((javaimp-tool-output-buf-name nil)) ;don't log
-      (javaimp--call-build-tool
+      (javaimp-call-build-tool
        (symbol-value (intern (format "javaimp-%s-program" ext)))
        #'javaimp--read-jar-classes-handler
        (if (equal ext "jar") "tf" "list")
        ;; On cygwin, "jar/jmod" is a windows program, so file path
        ;; needs to be converted appropriately.
-       (javaimp-cygpath-convert-maybe file 'windows)))))
+       (javaimp-cygpath-convert-file-name file 'windows)))))
 
 (defun javaimp--read-jar-classes-handler ()
   "Used by `javaimp--read-jar-classes' to handle jar program
@@ -388,6 +391,34 @@ output."
                          (string-replace "$" "." curr))
          result)))
     result))
+
+(defun javaimp--get-file-classes-cached (file cache-sym class-reader)
+  "Return list of classes for FILE.  Use CACHE-SYM as a cache, it
+should be an alist with elements of the form (FILE
+. CACHED-FILE).  If not found in cache, or the cache is outdated,
+then classes are read using CLASS-READER, which should be a
+function of one argument, a FILE.  If that function throws an
+error, the cache for FILE is cleared."
+  (condition-case err
+      (let ((cached-file
+             (alist-get file (symbol-value cache-sym) nil nil #'string=)))
+        (when (or (not cached-file)
+                  ;; If the file doesn't exist this will be current
+                  ;; time, and thus condition always true
+                  (> (float-time (javaimp--get-file-ts file))
+	             (float-time (javaimp-cached-file-read-ts cached-file))))
+          (setq cached-file (make-javaimp-cached-file
+		             :file file
+		             :read-ts (javaimp--get-file-ts file)
+		             :classes (funcall class-reader file))))
+        (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=)
+              cached-file)
+        (javaimp-cached-file-classes cached-file))
+    (t
+     ;; Clear on any error
+     (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=) nil)
+     (signal (car err) (cdr err)))))
+
 
 
 ;; Some API functions
