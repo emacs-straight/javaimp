@@ -33,14 +33,16 @@ gradlew (Gradle wrapper), it is used in preference."
 Passes specially crafted init file as -I argument to gradle and
 invokes task contained in it.  This task outputs all needed
 information."
-  (message "Visiting Gradle build file %s..." file)
+  (when javaimp-verbose
+    (message "Visiting Gradle build file %s..." file))
   (let* ((alists (javaimp-gradle--call file #'javaimp-gradle--handler))
          (modules (mapcar (lambda (alist)
                             (javaimp-gradle--module-from-alist alist file))
                           alists)))
     ;; first module is always root
-    (message "Building tree for root: %s"
-             (javaimp-print-id (javaimp-module-id (car modules))))
+    (when javaimp-verbose
+      (message "Building tree for root: %s"
+               (javaimp-print-id (javaimp-module-id (car modules)))))
     (list
      (javaimp-tree-build (car modules) modules
 	                 ;; more or less reliable way to find children
@@ -133,13 +135,15 @@ descriptor."
          ;; in build file directory.
          (default-directory (file-name-directory file))
          ;; Prefer local gradle wrapper
-         (local-gradlew (if (memq system-type '(cygwin windows-nt))
+         (local-gradlew (if (eq system-type '(windows-nt))
                             "gradlew.bat"
                           "gradlew"))
          (program (if (file-exists-p local-gradlew)
                       (concat default-directory local-gradlew)
-                    javaimp-gradle-program)))
-    (javaimp-call-build-tool
+                    javaimp-gradle-program))
+         (task (concat mod-path "javaimpTask")))
+    (message "Calling Gradle task %s on %s ..." task file)
+    (javaimp-call-java-program
      program
      handler
      "-q"
@@ -149,8 +153,7 @@ descriptor."
      "-Dorg.gradle.java.compile-classpath-packaging=true"
      "-I" (javaimp-cygpath-convert-file-name
            (expand-file-name "javaimp-init-script.gradle"
-                             (concat javaimp-basedir
-                                     (file-name-as-directory "support"))))
-     (concat mod-path "javaimpTask"))))
+                             (file-name-concat javaimp-basedir "support")))
+     task)))
 
 (provide 'javaimp-gradle)

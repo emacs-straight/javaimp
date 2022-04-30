@@ -61,7 +61,7 @@
 ;; build tool, see `javaimp-maven-visit' and `javaimp-gradle-visit',
 ;; and the `javaimp-handler-regexp-alist' variable.  The output from
 ;; the build tool can be inspected in buffer named by
-;; `javaimp-tool-output-buf-name' variable.  If there exists
+;; `javaimp-output-buf-name' variable.  If there exists
 ;; Maven/Gradle wrapper in the project directory, as it is popular
 ;; these days, it will be used in preference to `javaimp-mvn-program'
 ;; / `javaimp-gradle-program'.
@@ -101,6 +101,9 @@
 ;; - `javaimp-imenu-use-sub-alists' - if non-nil then Imenu items are
 ;; presented in a nested fashion, instead of a flat list (the
 ;; default).
+;;
+;; - `javaimp-verbose' - set to non-nil to get more messages about
+;; what Javaimp is doing.
 ;;
 ;; See other defcustoms via 'M-x customize-group javaimp'.
 ;;
@@ -197,11 +200,6 @@ in per-directory locals)."
   "If non-nil, make sub-alist for each containing scope (e.g. a
 class)."
   :type 'boolean)
-
-(defcustom javaimp-verbose nil
-  "If non-nil, be verbose."
-  :type 'boolean)
-
 
 (defcustom javaimp-jar-program "jar"
   "Path to the `jar' program used to read contents of jar files."
@@ -314,7 +312,7 @@ any module's source file."
 ;; Dependencies
 
 (defsubst javaimp--get-file-ts (file)
-  (nth 5 (file-attributes file)))
+  (file-attribute-modification-time (file-attributes file)))
 
 (defun javaimp--update-module-maybe (node)
   (let ((module (javaimp-node-contents node))
@@ -349,25 +347,19 @@ any module's source file."
       (setf (javaimp-module-load-ts module)
             (current-time)))))
 
-(defun javaimp--get-jar-classes (file)
-  (javaimp--get-file-classes-cached
-   file
-   'javaimp-jar-file-cache
-   #'javaimp--read-jar-classes))
-
 (defun javaimp--read-jar-classes (file)
   "Read FILE which should be a .jar or a .jmod and return classes
 contained in it as a list."
   (let ((ext (downcase (file-name-extension file))))
     (unless (member ext '("jar" "jmod"))
       (error "Unexpected file name: %s" file))
-    (let ((javaimp-tool-output-buf-name nil)) ;don't log
-      (javaimp-call-build-tool
+    (let ((javaimp-output-buf-name nil))
+      (javaimp-call-java-program
        (symbol-value (intern (format "javaimp-%s-program" ext)))
        #'javaimp--read-jar-classes-handler
        (if (equal ext "jar") "tf" "list")
-       ;; On cygwin, "jar/jmod" is a windows program, so file path
-       ;; needs to be converted appropriately.
+       ;; On cygwin, "jar/jmod" is a native windows program, so file
+       ;; path needs to be converted appropriately.
        (javaimp-cygpath-convert-file-name file 'windows)))))
 
 (defun javaimp--read-jar-classes-handler ()
@@ -398,7 +390,9 @@ should be an alist with elements of the form (FILE
 . CACHED-FILE).  If not found in cache, or the cache is outdated,
 then classes are read using CLASS-READER, which should be a
 function of one argument, a FILE.  If that function throws an
-error, the cache for FILE is cleared."
+error, the cache for FILE is cleared.  CLASS-READER may also be
+nil, in which case the symbol t is returned for a cache miss, and
+cache not updated."
   (condition-case err
       (let ((cached-file
              (alist-get file (symbol-value cache-sym) nil nil #'string=)))
@@ -407,13 +401,17 @@ error, the cache for FILE is cleared."
                   ;; time, and thus condition always true
                   (> (float-time (javaimp--get-file-ts file))
 	             (float-time (javaimp-cached-file-read-ts cached-file))))
-          (setq cached-file (make-javaimp-cached-file
-		             :file file
-		             :read-ts (javaimp--get-file-ts file)
-		             :classes (funcall class-reader file))))
-        (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=)
-              cached-file)
-        (javaimp-cached-file-classes cached-file))
+          (setq cached-file (if class-reader
+                                (make-javaimp-cached-file
+		                 :file file
+		                 :read-ts (javaimp--get-file-ts file)
+		                 :classes (funcall class-reader file))
+                              t)))
+        (if (eq cached-file t)
+            t
+          (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=)
+                cached-file)
+          (javaimp-cached-file-classes cached-file)))
     (t
      ;; Clear on any error
      (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=) nil)
@@ -476,10 +474,13 @@ current module or source tree, see
                     ;; jdk
                     (when javaimp-java-home
                       (javaimp--get-jdk-classes javaimp-java-home))
-                    ;; module dependencies
+                    ;; Module dependencies.  We build the list each
+                    ;; time because jars may change.
                     (when module
-                      (javaimp--get-module-deps-classes module))
-                    ;; current module or source tree
+                      (javaimp--collect-classes 'javaimp-jar-file-cache
+                                                #'javaimp--read-jar-classes
+                                                (javaimp-module-dep-jars module)))
+                    ;; Current module or source tree
                     (when javaimp-parse-current-module
                       (seq-mapcat #'javaimp--get-directory-classes
                                   (javaimp--get-current-source-dirs module)))))
@@ -499,36 +500,51 @@ current module or source tree, see
 JAVA-HOME (earlier Java versions), read all .jar files in it."
   (let ((dir (concat (file-name-as-directory java-home) "jmods")))
     (if (file-directory-p dir)
-        (seq-mapcat #'javaimp--get-jar-classes
-                    (directory-files dir t "\\.jmod\\'"))
+        (javaimp--collect-classes
+         'javaimp-jar-file-cache #'javaimp--read-jar-classes
+         (directory-files dir t "\\.jmod\\'"))
       (setq dir (mapconcat #'file-name-as-directory
                            `(,java-home "jre" "lib") nil))
       (if (file-directory-p dir)
-          (seq-mapcat #'javaimp--get-jar-classes
-                      (directory-files dir t "\\.jar\\'"))
+          (javaimp--collect-classes
+           'javaimp-jar-file-cache #'javaimp--read-jar-classes
+           (directory-files dir t "\\.jar\\'"))
         (user-error "Could not load JDK classes")))))
 
-(defun javaimp--get-module-deps-classes (module)
-  ;; We're not caching full list of classes coming from
-  ;; module dependencies because jars may change
-  (let (jar-errors)
-    (prog1
-        (seq-mapcat
-         (lambda (jar)
-           (condition-case err
-               (javaimp--get-jar-classes jar)
-             (t
-              (push (concat jar ": " (error-message-string err))
-                    jar-errors)
-              nil)))
-         (javaimp-module-dep-jars module))
-      (when jar-errors
-        (with-output-to-temp-buffer "*Javaimp Jar errors*"
-          (princ javaimp--jar-error-header)
-          (terpri)
-          (dolist (err (nreverse jar-errors))
-            (princ err)
-            (terpri)))))))
+(defun javaimp--collect-classes (cache-sym fun files)
+  (let (tmp unread res errors)
+    ;; Collect from cache hits
+    (dolist (file files)
+      (setq tmp (javaimp--get-file-classes-cached file cache-sym nil))
+      (if (eq tmp t)
+          (push file unread)
+        (setq res (nconc res (copy-sequence tmp)))))
+    ;; Now read all cache misses
+    (when unread
+      (let ((reporter (make-progress-reporter
+                       (format "Reading %d files (%d taken from cache) ..."
+                               (length unread) (- (length files) (length unread)))
+                       0 (length unread)))
+            (i 0))
+        (dolist (file unread)
+          (setq tmp (condition-case err
+                        (javaimp--get-file-classes-cached file cache-sym fun)
+                      (t
+                       (push (concat file ": " (error-message-string err))
+                             errors)
+                       nil)))
+          (setq res (nconc res (copy-sequence tmp)))
+          (setq i (1+ i))
+          (progress-reporter-update reporter i file))
+        (progress-reporter-done reporter)))
+    (when errors
+      (with-output-to-temp-buffer "*Javaimp collect classes errors*"
+        (princ javaimp--jar-error-header)
+        (terpri)
+        (dolist (err (nreverse errors))
+          (princ err)
+          (terpri))))
+    res))
 
 (defun javaimp--get-current-source-dirs (module)
   "Return list of source directories for inspection for Java
@@ -557,25 +573,29 @@ If there's no such directive, then the last resort is just
 
 (defun javaimp--get-directory-classes (dir)
   (when (file-accessible-directory-p dir)
-    (when javaimp-verbose
-      (message "Parsing files in %s..." dir))
-    (seq-mapcat #'javaimp--get-file-classes
-                (seq-filter (lambda (file)
-                              (not (file-symlink-p file)))
-                            (directory-files-recursively dir "\\.java\\'")))))
-
-(defun javaimp--get-file-classes (file)
-  (if-let ((buf (get-file-buffer file)))
-      ;; Don't use cache, just collect what we have in buffer
-      (with-current-buffer buf
-        (save-excursion
-          (save-restriction
-            (widen)
-            (javaimp--get-buffer-classes))))
-    (javaimp--get-file-classes-cached
-     file
-     'javaimp-source-file-cache
-     #'javaimp--read-source-classes)))
+    (let ((sources (seq-filter (lambda (f)
+                                 (not (file-symlink-p f)))
+                               (directory-files-recursively dir "\\.java\\'")))
+          files buffers)
+      (dolist (s sources)
+        (if-let ((buf (get-file-buffer s)))
+            (push buf buffers)
+          (push s files)))
+      (append
+       ;; Read files
+       (javaimp--collect-classes
+        'javaimp-source-file-cache #'javaimp--read-source-classes files)
+       ;; Read buffers.  Don't use cache, just collect what we have in
+       ;; buffer.
+       (with-delayed-message
+           (1 (format "Reading %d buffers..." (length buffers)))
+         (seq-mapcat (lambda (buf)
+                       (with-current-buffer buf
+                         (save-excursion
+                           (save-restriction
+                             (widen)
+                             (javaimp--get-buffer-classes)))))
+                     buffers))))))
 
 (defun javaimp--read-source-classes (file)
   (with-temp-buffer
@@ -762,8 +782,9 @@ in a major mode hook."
                             (javaimp-parse-get-interface-abstract-methods))))
     (mapcar
      (lambda (top-class)
-       (message "Building tree for top-level class-like scope: %s"
-                (javaimp-scope-name top-class))
+       (when javaimp-verbose
+         (message "Building tree for top-level class-like scope: %s"
+                  (javaimp-scope-name top-class)))
        (javaimp-tree-build top-class
                            (append methods
                                    classes

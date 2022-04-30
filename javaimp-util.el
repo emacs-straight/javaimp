@@ -43,9 +43,15 @@ it is initialized from the JAVA_HOME environment variable."
   :type 'string
   :group 'javaimp)
 
-(defvar javaimp-tool-output-buf-name "*javaimp-tool-output*"
-  "Name of the buffer to which `javaimp-call-build-tool' copies
-build tool output.  Can be let-bound to nil to suppress copying.")
+(defcustom javaimp-verbose nil
+  "If non-nil, be verbose."
+  :type 'boolean
+  :group 'javaimp)
+
+(defvar javaimp-output-buf-name "*javaimp-output*"
+  "Name of the buffer to which `javaimp-call-java-program' copies
+invoked programs's output.  Can be let-bound to nil to suppress
+copying.")
 
 
 
@@ -223,10 +229,9 @@ the FILENAME unchanged."
 	  (car (apply #'process-lines javaimp-cygpath-program args))))
     filename))
 
-(defun javaimp-call-build-tool (program handler &rest args)
+(defun javaimp-call-java-program (program handler &rest args)
   "Run PROGRAM with ARGS, then call HANDLER in the temporary buffer
 with point set to eob and return its result."
-  (message "Calling: %s %s" program (string-join args " "))
   (with-temp-buffer
     (let ((status
            (let ((coding-system-for-read
@@ -235,19 +240,20 @@ with point set to eob and return its result."
                   (if javaimp-java-home
                       (cons (format "JAVA_HOME=%s" javaimp-java-home)
                             process-environment)
-                    process-environment)))
+                    process-environment))
+                 (process-connection-type nil))
              (apply #'process-file program nil t nil args)))
 	  (buf (current-buffer)))
-      (when javaimp-tool-output-buf-name
+      (when javaimp-output-buf-name
         (with-current-buffer (get-buffer-create
-                              javaimp-tool-output-buf-name)
+                              javaimp-output-buf-name)
           (setq buffer-read-only nil)
 	  (erase-buffer)
 	  (insert-buffer-substring buf)
           (setq buffer-read-only t)))
       (unless (and (numberp status) (= status 0))
-        (when javaimp-tool-output-buf-name
-          (display-buffer javaimp-tool-output-buf-name))
+        (when javaimp-output-buf-name
+          (display-buffer javaimp-output-buf-name))
 	(error "%s exit status: %s" program status))
       (goto-char (point-min))
       (funcall handler))))

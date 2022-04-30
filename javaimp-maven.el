@@ -35,7 +35,8 @@ mvnw (Maven wrapper), it is used in preference."
 reads project structure from the output and records which files
 belong to which modules and other module information.  Returns
 resulting module trees."
-  (message "Visiting Maven POM file %s..." file)
+  (when javaimp-verbose
+    (message "Visiting Maven POM file %s..." file))
   (let* ((xml-tree (javaimp-maven--call
                     file
                     #'javaimp-maven--effective-pom-handler
@@ -76,8 +77,9 @@ resulting module trees."
                                          modules)))
 		        (cdr modules)))))
       (mapcar (lambda (root)
-                (message "Building tree for root: %s"
-                         (javaimp-print-id (javaimp-module-id root)))
+                (when javaimp-verbose
+                  (message "Building tree for root: %s"
+                           (javaimp-print-id (javaimp-module-id root))))
                 (javaimp-tree-build
                  root modules
 	         ;; more or less reliable way to find children is to
@@ -210,13 +212,14 @@ are somewhat arbitrary."
 (defun javaimp-maven--call (file handler task &optional dir)
   (let* ((default-directory (or dir (file-name-directory file)))
          ;; Prefer local mvn wrapper
-         (local-mvnw (if (memq system-type '(cygwin windows-nt))
+         (local-mvnw (if (memq system-type '(windows-nt))
                          "mvnw.cmd"
                        "mvnw"))
          (program (if (file-exists-p local-mvnw)
                       (concat default-directory local-mvnw)
                     javaimp-mvn-program)))
-    (javaimp-call-build-tool
+    (message "Calling Maven task %s on %s ..." task file)
+    (javaimp-call-java-program
      program
      handler
      "-f" (javaimp-cygpath-convert-file-name file)
