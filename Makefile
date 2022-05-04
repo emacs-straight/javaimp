@@ -4,7 +4,7 @@
 # use "make check SELECTOR=t".
 
 EMACS = emacs -Q -batch -L .
-SRCS = javaimp-util.el javaimp-gradle.el javaimp-maven.el javaimp-parse.el javaimp.el
+SRCS = javaimp-util.el javaimp-gradle.el javaimp-maven.el javaimp-parse.el javaimp.el javaimp-tests.el
 TESTS = $(wildcard tests/*.el)
 OBJS = $(SRCS:.el=.elc) $(TESTS:.el=.elc)
 SELECTOR ?= (not (tag :expensive))

@@ -6,6 +6,7 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
+(require 'ert-x)
 (require 'javaimp-parse)
 (require 'javaimp-util)
 
@@ -174,36 +175,35 @@ throws E1 {"
 
 ;; Tests for parse api
 
-(defun javaimp-test-parse--check-defuns ()
+(defun javaimp-test-parse--get-all-scopes-defuns ()
   (let* ((scopes (javaimp-parse-get-all-scopes
                   nil nil
                   (lambda (s)
-                    (memq (javaimp-scope-type s) '(class interface enum method)))
+                    (memq (javaimp-scope-type s)
+                          '(class interface enum method)))
                   (lambda (s)
-                    (memq (javaimp-scope-type s) '(class interface enum method)))))
-         (actual (mapcar
-                  (lambda (s)
-                    (let (res)
-                      (while s
-                        (push (list (javaimp-scope-type s)
-                                    (javaimp-scope-name s))
-                              res)
-                        (setq s (javaimp-scope-parent s)))
-                      (nreverse res)))
-                  scopes))
+                    (memq (javaimp-scope-type s)
+                          '(class interface enum method)))))
+         (actual (mapcar #'javaimp-test-parse--simplify-scope scopes))
          (expected
           '(((class "Top"))
+
             ((class "CInner1") (class "Top"))
+
             ((method "foo()") (class "CInner1") (class "Top"))
+
             ((class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
+
             ((method "foo()")
              (class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
+
             ((class "CInner1_CLocal1_CLocal1")
              (method "foo()")
              (class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
+
             ((method "foo()")
              (class "CInner1_CLocal1_CLocal1")
              (method "foo()")
@@ -212,6 +212,7 @@ throws E1 {"
 
             ((class "CInner1_CLocal2")
              (method "foo()") (class "CInner1") (class "Top"))
+
             ((method "foo()")
              (class "CInner1_CLocal2")
              (method "foo()") (class "CInner1") (class "Top"))
@@ -220,46 +221,64 @@ throws E1 {"
              (class "CInner1") (class "Top"))
 
             ((class "CInner1_CInner1") (class "CInner1") (class "Top"))
+
             ((method "foo()")
              (class "CInner1_CInner1") (class "CInner1") (class "Top"))
+
             ((method "bar()")
              (class "CInner1_CInner1") (class "CInner1") (class "Top"))
 
             ((interface "IInner1") (class "Top"))
+
             ((method "foo()") (interface "IInner1") (class "Top"))
+
             ((class "IInner1_CInner1") (interface "IInner1") (class "Top"))
+
             ((method "foo()")
              (class "IInner1_CInner1") (interface "IInner1") (class "Top"))
+
             ((method "defaultMethod(String)")
              (interface "IInner1") (class "Top"))
 
             ((interface "IInner1_IInner1") (interface "IInner1") (class "Top"))
+
             ((method "defaultMethod(String)")
              (interface "IInner1_IInner1") (interface "IInner1") (class "Top"))
 
             ((enum "EnumInner1") (class "Top"))
+
             ((method "EnumInner1()") (enum "EnumInner1") (class "Top"))
+
             ((method "foo()") (enum "EnumInner1") (class "Top"))
+
             ((enum "EnumInner1_EInner1") (enum "EnumInner1") (class "Top"))
 
             ((class "ColocatedTop"))
+
             ((method "foo()") (class "ColocatedTop"))
+
             ((method "bar(String,String)") (class "ColocatedTop")))))
     (should (= (length expected) (length actual)))
     (dotimes (i (length expected))
       (should (equal (nth i expected) (nth i actual))))
-    ;;
+    ;; selectively check positions
     (let ((data
-         `((,(nth 0 scopes) "Top" 26 36)
-           (,(nth 16 scopes) "foo()" 1798 1804)
-           (,(nth 23 scopes) "EnumInner1_EInner1" 2462 2486)
-           (,(nth 25 scopes) "foo()" 2554 2560))))
+           `((,(nth 0 scopes) "Top" 26 36)
+             (,(nth 16 scopes) "foo()" 1798 1804)
+             (,(nth 23 scopes) "EnumInner1_EInner1" 2462 2486)
+             (,(nth 25 scopes) "foo()" 2554 2560))))
       (dolist (elt data)
         (let ((scope (nth 0 elt)))
           (should (equal (nth 1 elt) (javaimp-scope-name scope)))
           (should (equal (nth 2 elt) (javaimp-scope-start scope)))
           (should (equal (nth 3 elt) (javaimp-scope-open-brace scope))))))))
 
+(defun javaimp-test-parse--simplify-scope (s)
+  (let (res)
+    (while s
+      (push (list (javaimp-scope-type s) (javaimp-scope-name s)) res)
+      (setq s (javaimp-scope-parent s)))
+    (nreverse res)))
 
 (ert-deftest javaimp-parse-get-package ()
   (with-temp-buffer
@@ -298,19 +317,62 @@ import static some_class.fun_2; // comment
 
 (ert-deftest javaimp-parse-get-all-scopes ()
   (with-temp-buffer
-    (insert-file-contents
-     (file-name-concat javaimp-basedir "tests" "data" "test1-misc-classes.java"))
+    (insert-file-contents (ert-resource-file "test1.java"))
     (should-not javaimp-parse--dirty-pos)
     ;;
     ;; parse full buffer
-    (javaimp-test-parse--check-defuns)
+    (javaimp-test-parse--get-all-scopes-defuns)
     (should javaimp-parse--dirty-pos)
     (should-not (marker-position javaimp-parse--dirty-pos))
     ;;
     ;; reparse half of the buffer
     (set-marker javaimp-parse--dirty-pos (/ (- (point-max) (point-min)) 2))
-    (javaimp-test-parse--check-defuns)
+    (javaimp-test-parse--get-all-scopes-defuns)
     (should-not (marker-position javaimp-parse--dirty-pos))
     ;;
     ;; don't reparse
-    (javaimp-test-parse--check-defuns)))
+    (javaimp-test-parse--get-all-scopes-defuns)))
+
+(ert-deftest javaimp-parse-get-enclosing-scope ()
+  (let ((testcases
+         '(;; bob
+           ((goto-char (point-min)))
+           ;; before first scope
+           ((re-search-forward "class Top\\>"))
+           ;; before first method
+           ((re-search-forward "class CInner1\\>")
+            (class "Top"))
+           ;; inside method
+           ((re-search-forward "class CInner1_CLocal2\\>")
+            (method "foo()") (class "CInner1") (class "Top"))
+           ;; between methods
+           ((re-search-forward "class CInner1_CInner1\\>")
+            (class "CInner1") (class "Top"))
+           ;; after last method
+           ((progn
+              (re-search-forward "class ColocatedTop\\>")
+              (search-backward "}"))
+            (class "Top"))
+           ;; between top-level scopes
+           ((re-search-forward "class ColocatedTop\\>"))
+           ;; after last scope
+           ((progn
+              (goto-char (point-max))
+              (search-backward "}")
+              (forward-char)))
+           ;; eob
+           ((goto-char (point-max))))))
+    (dolist (testcase testcases)
+      (with-temp-buffer
+        (insert-file-contents (ert-resource-file "test1.java"))
+        (eval (car testcase))           ;move
+        (should
+         (equal (cdr testcase)
+                (javaimp-test-parse--simplify-scope
+                 (javaimp-parse-get-enclosing-scope
+                  (lambda (s)
+                    (memq (javaimp-scope-type s)
+                          '(class interface enum method)))
+                  (lambda (s)
+                    (memq (javaimp-scope-type s)
+                          '(class interface enum method)))))))))))

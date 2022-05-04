@@ -6,12 +6,12 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
+(require 'ert-x)
 (require 'javaimp)
 
 (ert-deftest javaimp-get-buffer-classes ()
   (with-temp-buffer
-    (insert-file-contents
-     (file-name-concat javaimp-basedir "tests" "data" "test1-misc-classes.java"))
+    (insert-file-contents (ert-resource-file "test1.java"))
     (should (equal (javaimp--get-buffer-classes)
                    '("org.foo.Top"
                      "org.foo.Top.CInner1"

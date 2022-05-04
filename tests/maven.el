@@ -6,6 +6,7 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
+(require 'ert-x)
 (require 'javaimp-maven)
 (require 'javaimp-tests)
 
@@ -32,8 +33,7 @@
 (ert-deftest javaimp-maven-visit-single ()
   :tags '(:expensive)
   (javaimp-call-with-data
-   (file-name-concat
-    javaimp-basedir "tests" "data" "maven-single.tar.gz")
+   (ert-resource-file "maven-single.tar.gz")
    (lambda (tmpdir)
      (should
       (equal
@@ -44,8 +44,7 @@
 (ert-deftest javaimp-maven-visit-multi ()
   :tags '(:expensive)
   (javaimp-call-with-data
-   (file-name-concat
-    javaimp-basedir "tests" "data" "maven-multi.tar.gz")
+   (ert-resource-file "maven-multi.tar.gz")
    (lambda (tmpdir)
      (should
       (equal

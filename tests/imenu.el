@@ -6,6 +6,7 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
+(require 'ert-x)
 (require 'javaimp)
 
 (defun javaimp-test-imenu--simplify-entries (alist)
@@ -18,9 +19,7 @@
 
 (ert-deftest javaimp-imenu-create-index ()
   (let ((actual (with-temp-buffer
-                  (insert-file-contents
-                   (file-name-concat
-                    javaimp-basedir "tests" "data" "test1-misc-classes.java"))
+                  (insert-file-contents (ert-resource-file "test1.java"))
                   (let ((imenu-use-markers nil))
                     (javaimp-imenu-create-index))))
         (expected-names
@@ -47,9 +46,7 @@
 
 (ert-deftest javaimp-imenu-create-index-use-sub-alists ()
   (let ((actual (with-temp-buffer
-                  (insert-file-contents
-                   (file-name-concat
-                    javaimp-basedir "tests" "data" "test1-misc-classes.java"))
+                  (insert-file-contents (ert-resource-file "test1.java"))
                   (let ((imenu-use-markers nil)
                         (javaimp-imenu-use-sub-alists t))
                     (javaimp-imenu-create-index))))

@@ -6,6 +6,7 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
+(require 'ert-x)
 (require 'javaimp-gradle)
 (require 'javaimp-tests)
 
@@ -32,8 +33,7 @@
 (ert-deftest javaimp-gradle-visit-multi ()
   :tags '(:expensive)
   (javaimp-call-with-data
-   (file-name-concat
-    javaimp-basedir "tests" "data" "gradle-multi.tar.gz")
+   (ert-resource-file "gradle-multi.tar.gz")
    (lambda (tmpdir)
      (should
       (equal

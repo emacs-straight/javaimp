@@ -5,19 +5,20 @@
 ;; Author: Filipp Gunbin <fgunbin@fastmail.fm>
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
+(require 'ert-x)
+
 (defun javaimp-call-with-data (filename handler)
   "Untar FILENAME into temporary directory and call HANDLER,
 supplying that directory name as the only arg."
-  (let ((tmpdir (file-name-as-directory (make-temp-file "javaimp" t))))
-    (unwind-protect
-        (let ((rc (call-process
-                   "tar" nil nil nil
-                   "-x"
-                   "-f" filename
-                   "-C" tmpdir)))
-          (unless (= rc 0)
-            (error "Cannot untar test data %s: %d" filename rc))
-          (funcall handler tmpdir))
-      (delete-directory tmpdir t))))
+  (ert-with-temp-directory tmpdir
+    :prefix "javaimp-test"
+    (let ((rc (call-process
+               "tar" nil nil nil
+               "-x"
+               "-f" filename
+               "-C" tmpdir)))
+      (if (= rc 0)
+          (funcall handler tmpdir)
+        (error "Cannot untar test data file %s: %d" filename rc)))))
 
 (provide 'javaimp-tests)
