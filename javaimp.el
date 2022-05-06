@@ -1,6 +1,6 @@
 ;;; javaimp.el --- Add and reorder Java import statements in Maven/Gradle projects  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2014-2021  Free Software Foundation, Inc.
+;; Copyright (C) 2014-2022  Free Software Foundation, Inc.
 
 ;; Author: Filipp Gunbin <fgunbin@fastmail.fm>
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
@@ -22,19 +22,23 @@
 
 ;;; Commentary:
 
-;; Allows to manage Java import statements in Maven/Gradle projects.
-;; This module does not add all needed imports automatically!  It only
-;; helps you to quickly add imports when stepping through compilation
-;; errors.  In addition, this module provides good Imenu support for
-;; Java source files - with nesting and abstract methods in interfaces
-;; and abstract classes.  It provides suitable functions to use as
-;; `beginning-of-defun-function' / `end-of-defun-function' /
-;; `add-log-current-defun-function' as well.
+;; Allows to manage Java import statements in Maven / Gradle projects,
+;; plus some editing and navigation support.  This module does not add
+;; all needed imports automatically!  It only helps you to quickly add
+;; imports when stepping through compilation errors.  In addition,
+;; this module provides `javaimp-minor-mode' which enables decent
+;; Imenu support (with nesting and abstract methods in interfaces and
+;; abstract classes) and some navigation functions.
 ;;
+;;   Quick start
 ;;
-;;   Quick start:
+;; - Put something like this in your .emacs:
 ;;
-;; - Customize `javaimp-import-group-alist'.
+;; (require 'javaimp)
+;; (add-to-list 'javaimp-import-group-alist
+;;   '("\\`my.company\\." . 80))
+;; (keymap-global-set "C-c J v" #'javaimp-visit-project)
+;; (add-hook 'java-mode-hook #'javaimp-minor-mode)
 ;;
 ;; - Call `javaimp-visit-project', giving it the top-level build file
 ;; of your project.  If called within a project, supplies useful
@@ -46,29 +50,36 @@
 ;; `javaimp-add-import'.
 ;;
 ;;
-;;   Some details:
+;;   Visiting projects & managing imports
 ;;
-;; Contents of jar files, list of classes in source files, and
-;; Maven/Gradle project structures are cached, so usually only the
-;; first command should take a considerable amount of time to
-;; complete.  Project structure is re-read if a module's build file or
-;; any of its parents' build files (within visited tree) was modified
-;; since last check.  `javaimp-flush-cache' clears jar / source cache.
+;; Lists of classes in archive and source files, and Maven / Gradle
+;; project structures are cached, so usually only the first command
+;; should take a considerable amount of time to complete.  Project
+;; structure is re-read if a module's build file or any of its
+;; parents' build files (within visited tree) was modified since last
+;; check.
 ;;
-;; To forget visited projects structure eval this:
-;; (setq javaimp-project forest nil)
+;; `javaimp-flush-cache': command to clear jar / source cache.
+;;
+;; `javaimp-forget-visited-projects': command to forget all visited
+;; projects.
 ;;
 ;; Project structure and dependency information is retrieved from the
-;; build tool, see `javaimp-maven-visit' and `javaimp-gradle-visit',
-;; and the `javaimp-handler-regexp-alist' variable.  The output from
-;; the build tool can be inspected in buffer named by
-;; `javaimp-output-buf-name' variable.  If there exists
-;; Maven/Gradle wrapper in the project directory, as it is popular
-;; these days, it will be used in preference to `javaimp-mvn-program'
-;; / `javaimp-gradle-program'.
+;; corresponding build tool, see functions `javaimp-maven-visit' and
+;; `javaimp-gradle-visit' for details (and generally, all handlers
+;; mentioned in `javaimp-handler-regexp-alist').  The output from the
+;; build tool can be inspected in the buffer named by
+;; `javaimp-output-buf-name' variable.  If there exists Maven / Gradle
+;; wrapper in the project directory, as it is popular these days, it
+;; will be used in preference to `javaimp-mvn-program' /
+;; `javaimp-gradle-program'.
 ;;
-;; See docstring of `javaimp-add-import' for how import completion
-;; alternative are collected.
+;; `javaimp-java-home': defcustom giving location of JDK to use.
+;; Classes from JDK are included into import completion candidates.
+;; Also, when invoking a Java program, JAVA_HOME environment variable
+;; is added to the subprocess environment.  The variable is
+;; initialized from JAVA_HOME environment variable, so typically you
+;; won't need to customize it.
 ;;
 ;; If you get jar reading errors with Gradle despite following
 ;; recommendation which is shown (text from
@@ -77,67 +88,37 @@
 ;; those jars are really not built yet.  In this case, just build them
 ;; manually, like: './gradlew :project1:build :project2:build'.
 ;;
-;; Important defcustoms are:
+;; `javaimp-add-import': command to add an import statement in the
+;; current file.  See its docstring for how completion candidates are
+;; collected.  When it is called for the first time in a given project
+;; / module, it parses dependency archives, as well as JDK ones, and
+;; it may take quite a while.
 ;;
-;; - `javaimp-java-home' - used to obtain classes in the JDK, and also
-;; the build tool is invoked with JAVA_HOME environment variable set
-;; to it.  It's initialized from JAVA_HOME env var, so typically it's
-;; not required to set it explicitly in Lisp.
+;; `javaimp-organize-import': command to organize imports in the
+;; current buffer, sorting and deleting duplicates.
 ;;
-;; - `javaimp-parse-current-module' - determines whether we parse the
-;; current module for the list of classes.  Parsing is implemented in
-;; javaimp-parse.el using `syntax-ppss', generally is simple (we do
-;; not try to parse the source completely - just the interesting
-;; pieces), but can be time-consuming for large projects (to be
-;; improved).  Currently, on the author's machine, source for
+;;
+;;   Source parsing
+;;
+;; `javaimp-parse-current-module': defcustom which determines whether
+;; we parse the current module for the list of classes.  Parsing is
+;; implemented in javaimp-parse.el using `syntax-ppss', generally is
+;; simple (we do not try to parse the source completely - just the
+;; interesting pieces), but can be time-consuming for large projects
+;; (to be improved).  Currently, on the author's machine, source for
 ;; java.util.Collections from JDK 11 (~ 5600 lines and > 1000
 ;; "scopes") parses in ~1.5 seconds, which is not that bad...
 ;;
-;; Parsing is also used for Imenu support and for navigation commands.
-;; As there's no minor/major mode (yet), you have to set
-;; `imenu-create-index-function' and `beginning-of-defun-function' /
-;; `end-of-defun-function' / `add-log-current-defun-function' in major
-;; mode hook yourself.  See example below.
+;; `javaimp-show-scopes': command to list all parsed "scopes" (blocks
+;; of code in braces) in the current buffer, with support for
+;; `next-error'.
 ;;
-;; - `javaimp-imenu-use-sub-alists' - if non-nil then Imenu items are
-;; presented in a nested fashion, instead of a flat list (the
-;; default).
+;; Parsing is also used for Imenu support and for navigation commands,
+;; these are installed by `javaimp-minor-mode'.
 ;;
-;; - `javaimp-verbose' - set to non-nil to get more messages about
-;; what Javaimp is doing.
-;;
-;; See other defcustoms via 'M-x customize-group javaimp'.
-;;
-;;
-;; `javaimp-show-scopes' lists all parsed "scopes" (blocks of code in
-;; braces), with support for `next-error'.
-;;
-;;
-;; Configuration example:
-;;
-;; (require 'javaimp)
-;; (add-to-list 'javaimp-import-group-alist
-;;   '("\\`\\(my\\.company\\.\\|my\\.company2\\.\\)" . 80))
-;; (global-set-key (kbd "C-c J v") 'javaimp-visit-project)
-;;
-;;
-;; And in `java-mode-hook':
-;;
-;; (local-set-key (kbd "C-c i") #'javaimp-add-import)
-;; (local-set-key (kbd "C-c o") #'javaimp-organize-imports)
-;; (local-set-key (kbd "C-c s") #'javaimp-show-scopes)
-;;
-;; To set imenu and navigation functions use:
-;;
-;; (setq imenu-create-index-function #'javaimp-imenu-create-index)
-;;
-;; (setq beginning-of-defun-function #'javaimp-beginning-of-defun)
-;; (setq end-of-defun-function #'javaimp-end-of-defun)
-;; (setq add-log-current-defun-function #'javaimp-add-log-current-defun)
-;; (define-key java-mode-map (kbd "C-M-a") #'beginning-of-defun)
-;; (define-key java-mode-map (kbd "C-M-e") #'end-of-defun)
-;;
-
+;; `javaimp-imenu-use-sub-alists': if non-nil then Imenu items are
+;; presented in a nested fashion, instead of a flat list (default is
+;; flat list).
 
 ;;; Code:
 
@@ -148,7 +129,6 @@
 
 (require 'imenu)
 
-
 ;; User options
 
 (defgroup javaimp ()
@@ -259,56 +239,6 @@ https://docs.gradle.org/current/userguide/java_library_plugin.html\
     (class . "cl")
     (interface . "in")
     (enum . "en")))
-
-
-;;;###autoload
-(defun javaimp-visit-project (file)
-  "Loads a project and its submodules from FILE.
-FILE should have a handler as per `javaimp-handler-regexp-alist'.
-Interactively, finds suitable files in this directory and parent
-directories, and offers them as completion alternatives for FILE,
-topmost first.
-
-After being processed by this command, the module tree becomes
-known to javaimp and `javaimp-add-import' may be called inside
-any module's source file."
-  (interactive
-   (let ((file-regexp (mapconcat #'car javaimp-handler-regexp-alist "\\|"))
-         (cur-dir (expand-file-name default-directory))
-         files parent)
-     (while (setq files (append (directory-files cur-dir t file-regexp) files)
-                  ;; Prevent infloop on root
-                  parent (file-name-directory (directory-file-name cur-dir))
-                  cur-dir (unless (string= parent cur-dir) parent)))
-     (list (read-file-name "Visit project from file: " nil files t))))
-  (setq file (expand-file-name file))
-  (let ((handler (or (assoc-default (file-name-nondirectory file)
-                                    javaimp-handler-regexp-alist
-                                    #'string-match)
-                     (user-error "No handler for file: %s" file))))
-    ;; Forget previous tree(s) loaded from this build file, if any.
-    ;; Additional project trees (see below) have the same file-orig,
-    ;; so there may be several here.
-    (when-let ((existing-list
-                (seq-filter (lambda (node)
-                              (equal (javaimp-module-file-orig
-                                      (javaimp-node-contents node))
-	                             file))
-                            javaimp-project-forest)))
-      (if (y-or-n-p "Forget already loaded project(s)?")
-          (setq javaimp-project-forest
-                (seq-remove (lambda (node)
-                              (memq node existing-list))
-                            javaimp-project-forest))
-        (user-error "Aborted")))
-    (let ((trees (funcall handler file)))
-      (push (car trees) javaimp-project-forest)
-      (dolist (node (cdr trees))
-        (when (y-or-n-p
-               (format "Include additional project tree rooted at %S?"
-                       (javaimp-module-id (javaimp-node-contents node))))
-          (push node javaimp-project-forest)))
-      (message "Loaded project from %s" file))))
 
 
 ;; Dependencies
@@ -1047,9 +977,103 @@ after this group of defuns."
         (when names
           (string-join names "."))))))
 
-
 
-;; Misc
+;; Main
+
+(defvar-keymap javaimp-basic-map
+  "i" #'javaimp-add-import
+  "o" #'javaimp-organize-imports
+  "s" #'javaimp-show-scopes)
+
+(defvar-keymap javaimp-minor-mode-map
+  "C-c j" javaimp-basic-map
+  ;; Override functions from java-mode
+  "C-M-a" #'beginning-of-defun
+  "C-M-e" #'end-of-defun)
+
+;;;###autoload
+(define-minor-mode javaimp-minor-mode
+  "Javaimp minor mode.
+When enabled, provides Imenu support and navigation functions
+using Javaimp facilities.
+
+\\{javaimp-minor-mode-map}"
+  :lighter " JavaImp"
+  :interactive (java-mode)
+  (if javaimp-minor-mode
+      (progn
+        (add-function :override (local 'imenu-create-index-function)
+                      #'javaimp-imenu-create-index)
+        (add-function :override (local 'beginning-of-defun-function)
+                      #'javaimp-beginning-of-defun)
+        (add-function :override (local 'end-of-defun-function)
+                      #'javaimp-end-of-defun)
+        (add-function :override (local 'add-log-current-defun-function)
+                      #'javaimp-add-log-current-defun))
+    (remove-function (local 'imenu-create-index-function)
+                     #'javaimp-imenu-create-index)
+    (remove-function (local 'beginning-of-defun-function)
+                     #'javaimp-beginning-of-defun)
+    (remove-function (local 'end-of-defun-function)
+                     #'javaimp-end-of-defun)
+    (remove-function (local 'add-log-current-defun-function)
+                     #'javaimp-add-log-current-defun)))
+
+
+;;;###autoload
+(defun javaimp-visit-project (file)
+  "Loads a project and its submodules from FILE.
+FILE should have a handler as per `javaimp-handler-regexp-alist'.
+Interactively, finds suitable files in this directory and parent
+directories, and offers them as completion alternatives for FILE,
+topmost first.
+
+After being processed by this command, the module tree becomes
+known to javaimp and `javaimp-add-import' may be called inside
+any module's source file."
+  (interactive
+   (let ((file-regexp (mapconcat #'car javaimp-handler-regexp-alist "\\|"))
+         (cur-dir (expand-file-name default-directory))
+         files parent)
+     (while (setq files (append (directory-files cur-dir t file-regexp) files)
+                  ;; Prevent infloop on root
+                  parent (file-name-directory (directory-file-name cur-dir))
+                  cur-dir (unless (string= parent cur-dir) parent)))
+     (list (read-file-name "Visit project from file: " nil files t))))
+  (setq file (expand-file-name file))
+  (let ((handler (or (assoc-default (file-name-nondirectory file)
+                                    javaimp-handler-regexp-alist
+                                    #'string-match)
+                     (user-error "No handler for file: %s" file))))
+    ;; Forget previous tree(s) loaded from this build file, if any.
+    ;; Additional project trees (see below) have the same file-orig,
+    ;; so there may be several here.
+    (when-let ((existing-list
+                (seq-filter (lambda (node)
+                              (equal (javaimp-module-file-orig
+                                      (javaimp-node-contents node))
+	                             file))
+                            javaimp-project-forest)))
+      (if (y-or-n-p "Forget already loaded project(s)?")
+          (setq javaimp-project-forest
+                (seq-remove (lambda (node)
+                              (memq node existing-list))
+                            javaimp-project-forest))
+        (user-error "Aborted")))
+    (let ((trees (funcall handler file)))
+      (push (car trees) javaimp-project-forest)
+      (dolist (node (cdr trees))
+        (when (y-or-n-p
+               (format "Include additional project tree rooted at %S?"
+                       (javaimp-module-id (javaimp-node-contents node))))
+          (push node javaimp-project-forest)))
+      (message "Loaded project from %s" file))))
+
+
+(defun javaimp-forget-visited-projects ()
+  "Forget all visited projects."
+  (interactive)
+  (setq javaimp-project-forest nil))
 
 (defun javaimp-flush-cache ()
   "Flush all caches."
