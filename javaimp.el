@@ -128,6 +128,7 @@
 (require 'javaimp-parse)
 
 (require 'imenu)
+(require 'xref)
 
 ;; User options
 
@@ -193,6 +194,13 @@ class)."
 
 
 
+;; Structs
+
+(cl-defstruct javaimp-cached-file
+  file read-ts value)
+
+
+
 ;; Variables
 
 (defvar javaimp-handler-regexp-alist
@@ -204,15 +212,15 @@ A handler function takes one argument, a FILE.")
 (defvar javaimp-project-forest nil
   "Visited projects")
 
-(defvar javaimp-jar-file-cache nil
+(defvar javaimp-jar-file-classes-cache nil
   "Jar file cache, an alist of (FILE . CACHED-FILE), where FILE is
 expanded file name and CACHED-FILE is javaimp-cached-file
-struct.")
+struct.  Suitable for use with `javaimp--collect-from-file-cached'.")
 
-(defvar javaimp-source-file-cache nil
+(defvar javaimp-source-file-idents-cache nil
   "Source file cache, an alist of (FILE . CACHED-FILE), where FILE
 is expanded file name and CACHED-FILE is javaimp-cached-file
-struct.")
+struct.  Suitable for use with `javaimp--collect-from-file-cached'.")
 
 (defconst javaimp--jar-error-header
   "There were errors when reading some of the dependency files,
@@ -316,15 +324,15 @@ output."
          result)))
     result))
 
-(defun javaimp--get-file-classes-cached (file cache-sym class-reader)
-  "Return list of classes for FILE.  Use CACHE-SYM as a cache, it
-should be an alist with elements of the form (FILE
-. CACHED-FILE).  If not found in cache, or the cache is outdated,
-then classes are read using CLASS-READER, which should be a
+(defun javaimp--collect-from-file-cached (file cache-sym fun)
+  "Return what FUN returns when invoked on FILE, with cache.  Use
+CACHE-SYM as a cache, it should be an alist with elements of the
+form (FILE . CACHED-FILE).  If not found in cache, or the cache
+is outdated, then values are read using FUN, which should be a
 function of one argument, a FILE.  If that function throws an
-error, the cache for FILE is cleared.  CLASS-READER may also be
-nil, in which case the symbol t is returned for a cache miss, and
-cache not updated."
+error, the cache for FILE is cleared.  FUN may also be nil, in
+which case the symbol t is returned for a cache miss, and cache
+not updated."
   (condition-case err
       (let ((cached-file
              (alist-get file (symbol-value cache-sym) nil nil #'string=)))
@@ -333,17 +341,17 @@ cache not updated."
                   ;; time, and thus condition always true
                   (> (float-time (javaimp--get-file-ts file))
 	             (float-time (javaimp-cached-file-read-ts cached-file))))
-          (setq cached-file (if class-reader
+          (setq cached-file (if fun
                                 (make-javaimp-cached-file
 		                 :file file
 		                 :read-ts (javaimp--get-file-ts file)
-		                 :classes (funcall class-reader file))
+		                 :value (funcall fun file))
                               t)))
         (if (eq cached-file t)
             t
           (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=)
                 cached-file)
-          (javaimp-cached-file-classes cached-file)))
+          (javaimp-cached-file-value cached-file)))
     (t
      ;; Clear on any error
      (setf (alist-get file (symbol-value cache-sym) nil 'remove #'string=) nil)
@@ -351,9 +359,8 @@ cache not updated."
 
 
 
-;; Some API functions
-;;
-;; do not expose tree structure, return only modules
+;; Some API functions.  They do not expose tree structure, return only
+;; modules.
 
 (defun javaimp-find-module (predicate)
   "Returns first module in `javaimp-project-forest' for which
@@ -391,31 +398,27 @@ its dependencies.
 current module or source tree, see
 `javaimp--get-current-source-dirs'."
   (interactive
-   (let* ((file (expand-file-name (or buffer-file-name
-				      (error "Buffer is not visiting a file!"))))
-	  (node (javaimp-tree-find-node
-		 (lambda (m)
-                   (seq-some (lambda (dir)
-                               (string-prefix-p dir file))
-                             (javaimp-module-source-dirs m)))
-                 javaimp-project-forest))
-          (module (when node
-                    (javaimp--update-module-maybe node)
-                    (javaimp-node-contents node)))
-          (classes (append
-                    ;; jdk
-                    (when javaimp-java-home
-                      (javaimp--get-jdk-classes javaimp-java-home))
-                    ;; Module dependencies.  We build the list each
-                    ;; time because jars may change.
-                    (when module
-                      (javaimp--collect-classes 'javaimp-jar-file-cache
-                                                #'javaimp--read-jar-classes
-                                                (javaimp-module-dep-jars module)))
-                    ;; Current module or source tree
-                    (when javaimp-parse-current-module
-                      (seq-mapcat #'javaimp--get-directory-classes
-                                  (javaimp--get-current-source-dirs module)))))
+   (let* ((module (javaimp--detect-module))
+          (classes
+           (nconc
+            ;; jdk
+            (when javaimp-java-home
+              (javaimp--get-jdk-classes javaimp-java-home))
+            ;; Module dependencies.  We build the list each time
+            ;; because jars may change.
+            (when module
+              (javaimp--collect-from-files
+               #'javaimp--read-jar-classes (javaimp-module-dep-jars module)
+               'javaimp-jar-file-classes-cache))
+            ;; Current module or source tree
+            (when javaimp-parse-current-module
+              (mapcar #'javaimp--ident-to-fqcn
+                      (seq-mapcat
+                       (lambda (dir)
+                         (javaimp--collect-from-source-dir
+                          #'javaimp--collect-identifiers dir
+                          'javaimp-source-file-idents-cache))
+                       (javaimp--get-current-source-dirs module))))))
           (completion-regexp-list
            (and (not current-prefix-arg)
                 (symbol-at-point)
@@ -426,28 +429,41 @@ current module or source tree, see
                             (symbol-name (symbol-at-point))))))
   (javaimp-organize-imports (list (cons classname 'normal))))
 
+(defun javaimp--detect-module ()
+  (let* ((file (expand-file-name
+                (or buffer-file-name
+		    (error "Buffer is not visiting a file!"))))
+         (node (javaimp-tree-find-node
+	        (lambda (m)
+                  (seq-some (lambda (dir)
+                              (string-prefix-p dir file))
+                            (javaimp-module-source-dirs m)))
+                javaimp-project-forest)))
+    (when node
+      (javaimp--update-module-maybe node)
+      (javaimp-node-contents node))))
+
 (defun javaimp--get-jdk-classes (java-home)
   "If 'jmods' subdirectory exists in JAVA-HOME (Java 9+), read all
 .jmod files in it.  Else, if 'jre/lib' subdirectory exists in
 JAVA-HOME (earlier Java versions), read all .jar files in it."
-  (let ((dir (concat (file-name-as-directory java-home) "jmods")))
+  (let ((dir (file-name-concat java-home "jmods")))
     (if (file-directory-p dir)
-        (javaimp--collect-classes
-         'javaimp-jar-file-cache #'javaimp--read-jar-classes
-         (directory-files dir t "\\.jmod\\'"))
-      (setq dir (mapconcat #'file-name-as-directory
-                           `(,java-home "jre" "lib") nil))
+        (javaimp--collect-from-files
+         #'javaimp--read-jar-classes (directory-files dir t "\\.jmod\\'")
+         'javaimp-jar-file-classes-cache)
+      (setq dir (file-name-concat java-home "jre" "lib"))
       (if (file-directory-p dir)
-          (javaimp--collect-classes
-           'javaimp-jar-file-cache #'javaimp--read-jar-classes
-           (directory-files dir t "\\.jar\\'"))
+          (javaimp--collect-from-files
+           #'javaimp--read-jar-classes (directory-files dir t "\\.jar\\'")
+           'javaimp-jar-file-classes-cache)
         (user-error "Could not load JDK classes")))))
 
-(defun javaimp--collect-classes (cache-sym fun files)
+(defun javaimp--collect-from-files (fun files cache-sym)
   (let (tmp unread res errors)
     ;; Collect from cache hits
     (dolist (file files)
-      (setq tmp (javaimp--get-file-classes-cached file cache-sym nil))
+      (setq tmp (javaimp--collect-from-file-cached file cache-sym nil))
       (if (eq tmp t)
           (push file unread)
         (setq res (nconc res (copy-sequence tmp)))))
@@ -460,7 +476,7 @@ JAVA-HOME (earlier Java versions), read all .jar files in it."
             (i 0))
         (dolist (file unread)
           (setq tmp (condition-case err
-                        (javaimp--get-file-classes-cached file cache-sym fun)
+                        (javaimp--collect-from-file-cached file cache-sym fun)
                       (t
                        (push (concat file ": " (error-message-string err))
                              errors)
@@ -470,7 +486,7 @@ JAVA-HOME (earlier Java versions), read all .jar files in it."
           (progress-reporter-update reporter i file))
         (progress-reporter-done reporter)))
     (when errors
-      (with-output-to-temp-buffer "*Javaimp collect classes errors*"
+      (with-output-to-temp-buffer "*Javaimp errors*"
         (princ javaimp--jar-error-header)
         (terpri)
         (dolist (err (nreverse errors))
@@ -479,19 +495,19 @@ JAVA-HOME (earlier Java versions), read all .jar files in it."
     res))
 
 (defun javaimp--get-current-source-dirs (module)
-  "Return list of source directories for inspection for Java
-sources.  If MODULE is non-nil then result is module source dirs
-and additional source dirs.  Otherwise, try to determine the root
-of source tree from 'package' directive in the current buffer.
-If there's no such directive, then the last resort is just
+  "Return list of directories where Java sources reside.
+If MODULE is non-nil then result is module source dirs and
+additional source dirs.  Otherwise, try to determine the root of
+source tree from 'package' directive in the current buffer.  If
+there's no such directive, then the last resort is just
 `default-directory'."
   (if module
       (append
        (javaimp-module-source-dirs module)
        ;; additional source dirs
        (mapcar (lambda (dir)
-                 (concat (javaimp-module-build-dir module)
-                         (file-name-as-directory dir)))
+                 (file-name-as-directory
+                  (file-name-concat (javaimp-module-build-dir module) dir)))
                javaimp-additional-source-dirs))
     (list
      (if-let ((package (save-excursion
@@ -499,62 +515,95 @@ If there's no such directive, then the last resort is just
                            (widen)
                            (javaimp-parse-get-package)))))
          (string-remove-suffix
-          (mapconcat #'file-name-as-directory (split-string package "\\." t) nil)
+          (file-name-as-directory
+           (apply #'file-name-concat (split-string package "\\." t)))
           default-directory)
        default-directory))))
 
-(defun javaimp--get-directory-classes (dir)
+(defun javaimp--collect-from-source-dir (fun dir cache-sym)
+  "For each Java source file in DIR, invoke FUN and collect results
+in a flat list.  FUN is given two arguments: a buffer BUF, and
+file name FILE, which is non-nil only if BUF is a temporary
+buffer.  It should return a list of some values.
+
+Files which are not visited in some buffer in the current session
+are processed with `javaimp--collect-from-files', with CACHE-SYM
+given as corresponding argument.  In this case we visit the file
+in a temp buffer, and so FILE given to FUN will be non-nil.
+
+Unparsed or partially parsed buffers (as determined by
+`javaimp-parse-fully-parsed-p') are processed in
+`dolist-with-progress-reporter', without cache.
+
+Finally, already parsed buffers are processed in
+`with-delayed-message', without cache."
   (when (file-accessible-directory-p dir)
     (let ((sources (seq-filter (lambda (f)
                                  (not (file-symlink-p f)))
                                (directory-files-recursively dir "\\.java\\'")))
-          files buffers)
+          files parsed-bufs unparsed-bufs)
       (dolist (s sources)
         (if-let ((buf (get-file-buffer s)))
-            (push buf buffers)
+            (if (with-current-buffer buf
+                  (javaimp-parse-fully-parsed-p))
+                (push buf parsed-bufs)
+              (push buf unparsed-bufs))
           (push s files)))
-      (append
+      (nconc
        ;; Read files
-       (javaimp--collect-classes
-        'javaimp-source-file-cache #'javaimp--read-source-classes files)
-       ;; Read buffers.  Don't use cache, just collect what we have in
-       ;; buffer.
+       (javaimp--collect-from-files
+        (lambda (file)
+          (with-temp-buffer
+            (insert-file-contents file)
+            (funcall fun (current-buffer) file)))
+        files cache-sym)
+       ;; Parse unparsed buffers
+       (let (tmp)
+         (dolist-with-progress-reporter (buf unparsed-bufs tmp)
+             (format "Parsing %d buffers..." (length unparsed-bufs))
+           (setq tmp (nconc tmp (funcall fun buf nil)))))
+       ;; Read parsed buffers - usually will be quick
        (with-delayed-message
-           (1 (format "Reading %d buffers..." (length buffers)))
+           (1 (format "Reading %d buffers..." (length parsed-bufs)))
          (seq-mapcat (lambda (buf)
-                       (with-current-buffer buf
-                         (save-excursion
-                           (save-restriction
-                             (widen)
-                             (javaimp--get-buffer-classes)))))
-                     buffers))))))
+                       (funcall fun buf nil))
+                     parsed-bufs))))))
 
-(defun javaimp--read-source-classes (file)
-  (with-temp-buffer
-    (insert-file-contents file)
-    ;; We need only class-likes, and this is temp buffer, so for
-    ;; efficiency avoid parsing anything else
-    (let ((javaimp-parse--scope-hook #'javaimp-parse--scope-class))
-      (javaimp--get-buffer-classes))))
+(defun javaimp--collect-identifiers (buf file)
+  "Return all identifiers in buffer BUF, which is temporary if FILE
+is non-nil.  Suitable for use with
+`javaimp--collect-from-source-dir', which see."
+  (with-current-buffer buf
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let* ((javaimp-parse--scope-hook ;optimization
+                (if file
+                    #'javaimp-parse--scope-class
+                  javaimp-parse--scope-hook))
+               (package (javaimp-parse-get-package))
+               (scopes (javaimp-parse-get-all-scopes
+                        nil nil (javaimp-scope-defun-p))))
+          (mapcar (lambda (s)
+                    (goto-char (javaimp-scope-open-brace s))
+                    (propertize (javaimp-scope-name s)
+                                'file (or file buffer-file-name)
+                                'pos (point)
+                                'line (line-number-at-pos)
+                                'column (current-column)
+                                'package package
+                                'parents (javaimp-scope-concat-parents s)))
+                  scopes))))))
 
-(defun javaimp--get-buffer-classes ()
-  "Return fully-qualified names of all class-like scopes in the
-current buffer.  Anonymous classes are not included."
-  (let ((package (javaimp-parse-get-package))
-        (scopes (javaimp-parse-get-all-scopes
-                 nil nil (javaimp-scope-defun-p))))
-    (mapcar (lambda (class)
-              (if package
-                  (concat package "." class)
-                class))
-            (mapcar (lambda (scope)
-                      (let ((name (javaimp-scope-name scope))
-                            (parent-names (javaimp-scope-concat-parents scope)))
-                        (if (string-empty-p parent-names)
-                            name
-                          (concat parent-names "." name))))
-                    scopes))))
-
+(defun javaimp--ident-to-fqcn (ident)
+  "Convert identifier IDENT to fully-qualified class name."
+  (mapconcat #'identity
+             (seq-filter (lambda (s) (not (string-empty-p s)))
+                         (list
+                          (get-text-property 0 'package ident)
+                          (get-text-property 0 'parents ident)
+                          ident))
+             "."))
 
 
 ;; Organizing imports
@@ -732,6 +781,42 @@ in a major mode hook."
 (defun javaimp-imenu--function (_index-name index-position _scope)
   (goto-char index-position)
   (back-to-indentation))
+
+
+
+;; Xref support
+
+(defun javaimp-xref--backend () 'javaimp)
+
+(defun javaimp-xref--module-completion-table ()
+  (when-let ((mod (javaimp--detect-module)))
+    (setf (javaimp-module-ident-comp-table mod)
+          (or (javaimp-module-ident-comp-table mod)
+              (seq-mapcat
+               (lambda (dir)
+                 (javaimp--collect-from-source-dir
+                  #'javaimp--collect-identifiers dir
+                  'javaimp-source-file-idents-cache))
+               (javaimp--get-current-source-dirs mod))))))
+
+(cl-defmethod xref-backend-identifier-completion-table ((_backend (eql 'javaimp)))
+  (javaimp-xref--module-completion-table))
+
+(cl-defmethod xref-backend-definitions ((_backend (eql 'javaimp)) identifier)
+  (let* ((comp-table (javaimp-xref--module-completion-table))
+         (identifiers (all-completions identifier comp-table)))
+    (mapcar (lambda (ident)
+              (let* ((file (get-text-property 0 'file ident))
+                     (buf (get-file-buffer file))
+                     (loc (if buf
+                              (xref-make-buffer-location
+                               buf (get-text-property 0 'pos ident))
+                            (xref-make-file-location
+                             file
+                             (get-text-property 0 'line ident)
+                             (get-text-property 0 'column ident)))))
+                (xref-make ident loc)))
+            identifiers)))
 
 
 
@@ -1009,7 +1094,8 @@ using Javaimp facilities.
         (add-function :override (local 'end-of-defun-function)
                       #'javaimp-end-of-defun)
         (add-function :override (local 'add-log-current-defun-function)
-                      #'javaimp-add-log-current-defun))
+                      #'javaimp-add-log-current-defun)
+        (add-hook 'xref-backend-functions #'javaimp-xref--backend nil t))
     (remove-function (local 'imenu-create-index-function)
                      #'javaimp-imenu-create-index)
     (remove-function (local 'beginning-of-defun-function)
@@ -1017,7 +1103,8 @@ using Javaimp facilities.
     (remove-function (local 'end-of-defun-function)
                      #'javaimp-end-of-defun)
     (remove-function (local 'add-log-current-defun-function)
-                     #'javaimp-add-log-current-defun)))
+                     #'javaimp-add-log-current-defun)
+    (remove-hook 'xref-backend-functions #'javaimp-xref--backend t)))
 
 
 ;;;###autoload
@@ -1078,8 +1165,8 @@ any module's source file."
 (defun javaimp-flush-cache ()
   "Flush all caches."
   (interactive)
-  (setq javaimp-jar-file-cache nil
-        javaimp-source-file-cache nil))
+  (setq javaimp-jar-file-classes-cache nil
+        javaimp-source-file-idents-cache nil))
 
 (provide 'javaimp)
 

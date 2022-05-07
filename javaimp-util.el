@@ -73,14 +73,14 @@ copying.")
   ;; arguments: MODULE and list of parent IDs.  Should return a list
   ;; of strings - jar file names.
   dep-jars-fetcher
-  raw                                   ;used only during parsing
+  ;; Set later on demand
+  ident-comp-table
+  ;; Used only during parsing
+  raw
   )
 
 (cl-defstruct javaimp-id
   group artifact version)
-
-(cl-defstruct javaimp-cached-file
-  file read-ts classes)
 
 
 (defsubst javaimp-print-id (id)

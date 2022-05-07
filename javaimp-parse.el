@@ -668,10 +668,12 @@ it with PRED, and its parents with PARENT-PRED."
     scope))
 
 (defun javaimp-parse-get-class-abstract-methods ()
+  "Return all scopes which are abstract methods in classes."
   (javaimp-parse--all-scopes)
   (javaimp-parse--class-abstract-methods))
 
 (defun javaimp-parse-get-interface-abstract-methods ()
+  "Return all scopes which are abstract methods in interfaces."
   (let ((interfaces (javaimp-parse-get-all-scopes
                      nil nil
                      (lambda (s)
@@ -679,6 +681,11 @@ it with PRED, and its parents with PARENT-PRED."
                          '(interface) javaimp-scope-classlike-types)))))
     (seq-mapcat #'javaimp-parse--interface-abstract-methods
                 interfaces)))
+
+(defun javaimp-parse-fully-parsed-p ()
+  "Return non-nil if current buffer is fully parsed."
+  (and javaimp-parse--dirty-pos
+       (not (marker-position javaimp-parse--dirty-pos))))
 
 
 (defmacro javaimp-parse-without-hook (&rest body)
