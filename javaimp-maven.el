@@ -107,7 +107,11 @@ resulting module trees."
     (xml-parse-region start end)))
 
 (defun javaimp-maven--module-from-xml (elt file-orig)
-  (let ((build-elt (javaimp-xml-child 'build elt)))
+  (let* ((build-elt (javaimp-xml-child 'build elt))
+         (build-dir
+          (file-name-as-directory
+	   (javaimp-cygpath-convert-file-name
+	    (javaimp-xml-first-child (javaimp-xml-child 'directory build-elt))))))
     (make-javaimp-module
      :id (javaimp-maven--id-from-xml elt)
      :parent-id (javaimp-maven--id-from-xml (javaimp-xml-child 'parent elt))
@@ -115,14 +119,16 @@ resulting module trees."
      ;; later, see javaimp-maven--fill-modules-files
      :file nil
      :file-orig file-orig
-     ;; jar/war supported
-     :final-name (let ((packaging (or (javaimp-xml-first-child
-		                       (javaimp-xml-child 'packaging elt))
-                                      "jar")))
-                   (when (member packaging '("jar" "war"))
-                     (concat (javaimp-xml-first-child
-                              (javaimp-xml-child 'finalName build-elt))
-                             "." packaging)))
+     :artifact (let ((packaging (or (javaimp-xml-first-child
+		                     (javaimp-xml-child 'packaging elt))
+                                    "jar")))
+                 ;; only jar/war supported
+                 (when (member packaging '("jar" "war"))
+                   (file-name-concat
+                    build-dir
+                    (concat (javaimp-xml-first-child
+                             (javaimp-xml-child 'finalName build-elt))
+                            "." packaging))))
      :source-dirs (list (file-name-as-directory
 		         (javaimp-cygpath-convert-file-name
 		          (javaimp-xml-first-child
@@ -131,10 +137,11 @@ resulting module trees."
 		         (javaimp-cygpath-convert-file-name
 			  (javaimp-xml-first-child
 			   (javaimp-xml-child 'testSourceDirectory build-elt)))))
-     :build-dir (file-name-as-directory
-		 (javaimp-cygpath-convert-file-name
-		  (javaimp-xml-first-child (javaimp-xml-child 'directory build-elt))))
-     :dep-jars nil          ; dep-jars is initialized lazily on demand
+     :build-dir build-dir
+     ;; Because dependency list is retrieved by a separate command, we
+     ;; initialize it lazily on demand
+     :dep-jars t
+     :dep-jars-with-source t
      :load-ts (current-time)
      :dep-jars-fetcher #'javaimp-maven--fetch-dep-jars
      :raw elt)))

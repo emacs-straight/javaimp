@@ -64,19 +64,30 @@ copying.")
   id parent-id
   file
   file-orig
-  ;; Artifact final name, may be relative to build dir
-  final-name
-  source-dirs build-dir
-  dep-jars
+  (artifact
+   nil
+   :documentation "Artifact (usually jar) file name.")
+  source-dirs
+  build-dir
+  (dep-jars
+   nil
+   :documentation "List of dependency jars.  t means that the value is not
+initialized - use `dep-jars-fetcher' to initialize.")
+  (dep-jars-with-source
+   nil
+   :documentation "Dependency jars which have source directory available in the
+same project.  It is an alist with each element of the
+form (JAR-FILE . MODULE-ID).  A value of t means the alist is not
+yet initialized.")
   load-ts
-  ;; Function to retrieve DEP-JARS for MODULE, called with two
-  ;; arguments: MODULE and list of parent IDs.  Should return a list
-  ;; of strings - jar file names.
-  dep-jars-fetcher
-  ;; Set later on demand
-  ident-comp-table
-  ;; Used only during parsing
-  raw
+  (dep-jars-fetcher
+   nil
+   :documentation "Function to retrieve DEP-JARS for MODULE,
+called with two arguments: MODULE and list of parent IDs.  Should
+return a list of strings - jar file names.")
+  (raw
+   nil
+   :documentation "Internal, used only during parsing")
   )
 
 (cl-defstruct javaimp-id
@@ -155,26 +166,23 @@ UNWRAP is non-nil, then node contents is returned."
 (defun javaimp-tree-collect-nodes (contents-pred forest)
   "Return all nodes' contents for which CONTENTS-PRED returns
 non-nil."
-  (apply #'seq-concatenate 'list
-	 (mapcar (lambda (tree)
-                   (delq nil
-		         (javaimp-tree--collect-nodes-1 tree contents-pred)))
-		 forest)))
+  (delq nil
+        (seq-mapcat (lambda (tree)
+		      (javaimp-tree--collect-nodes-1 tree contents-pred))
+                    forest)))
 
 (defun javaimp-tree--collect-nodes-1 (tree contents-pred)
   (when tree
     (cons (and (funcall contents-pred (javaimp-node-contents tree))
                (javaimp-node-contents tree))
-	  (apply #'seq-concatenate 'list
-		 (mapcar (lambda (child)
-                           (delq nil
-			         (javaimp-tree--collect-nodes-1 child contents-pred)))
-			 (javaimp-node-children tree))))))
+          (seq-mapcat (lambda (child)
+			(javaimp-tree--collect-nodes-1 child contents-pred))
+                      (javaimp-node-children tree)))))
 
 
 (defun javaimp-tree-map-nodes (function pred forest)
-  "Recursively applies FUNCTION to each node's contents in FOREST
-and returns new tree.  FUNCTION should return (t . VALUE) if the
+  "Recursively apply FUNCTION to each node's contents in FOREST and
+return new tree.  FUNCTION should return (t . VALUE) if the
 result for this node should be made a list of the form (VALUE
 . CHILDREN), or (nil . VALUE) for plain VALUE as the result (in
 this case children are discarded).  The result for each node is

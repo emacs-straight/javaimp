@@ -83,11 +83,11 @@ descriptor."
                (cdr (assq 'parent-id alist)))
    :file (cdr (assq 'file alist))
    :file-orig file-orig
-   ;; jar/war supported
-   :final-name (when-let ((final-name (javaimp-cygpath-convert-file-name
-                                       (cdr (assq 'final-name alist)))))
-                 (and (member (file-name-extension final-name) '("jar" "war"))
-                      final-name))
+   :artifact (when-let ((final-name (javaimp-cygpath-convert-file-name
+                                     (cdr (assq 'final-name alist)))))
+               ;; only jar/war supported
+               (and (member (file-name-extension final-name) '("jar" "war"))
+                    final-name))
    :source-dirs (mapcar #'file-name-as-directory
                         (javaimp-split-native-path
                          (cdr (assq 'source-dirs alist))))
@@ -95,6 +95,7 @@ descriptor."
                (javaimp-cygpath-convert-file-name
                 (cdr (assq 'build-dir alist))))
    :dep-jars (javaimp-split-native-path (cdr (assq 'dep-jars alist)))
+   :dep-jars-with-source t
    :load-ts (current-time)
    :dep-jars-fetcher #'javaimp-gradle--fetch-dep-jars
    :raw nil))
