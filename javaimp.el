@@ -23,12 +23,14 @@
 ;;; Commentary:
 
 ;; Allows to manage Java import statements in Maven / Gradle projects,
-;; plus some editing and navigation support.  This module does not add
-;; all needed imports automatically!  It only helps you to quickly add
-;; imports when stepping through compilation errors.  In addition,
-;; this module provides `javaimp-minor-mode' which enables decent
-;; Imenu support (with nesting and abstract methods in interfaces and
-;; abstract classes) and some navigation functions.
+;; plus some editing and navigation support.  This package does not
+;; add all needed imports automatically!  It only helps you to quickly
+;; add imports when stepping through compilation errors.
+;;
+;; In addition, this package provides `javaimp-minor-mode' which
+;; enables decent Imenu support (with nesting and abstract methods in
+;; interfaces and abstract classes), xref support (though with default
+;; xref-find-references) and some navigation functions.
 ;;
 ;;   Quick start
 ;;
@@ -43,7 +45,10 @@
 ;; - Call `javaimp-visit-project', giving it the top-level build file
 ;; of your project.  If called within a project, supplies useful
 ;; default candidates in minibuffer input (topmost build file in the
-;; current directory hierarchy, then nested ones).
+;; current directory hierarchy, then nested ones).  If you don't visit
+;; a project, then Javaimp will try to determine current source root
+;; directory from the 'package' directive in the current file, and
+;; will still offer some functions.
 ;;
 ;; - Then in a Java buffer visiting a file under that project or one
 ;; of its submodules call `javaimp-organize-imports' or
@@ -97,6 +102,12 @@
 ;; `javaimp-organize-import': command to organize imports in the
 ;; current buffer, sorting and deleting duplicates.
 ;;
+;; If you don't visit a project, then Javaimp tries to determine
+;; current source root directory (see
+;; `javaimp--get-current-source-dir'), dependency information of
+;; course will not be available, and you'll get completions only from
+;; your current sources (and from JDK).
+;;
 ;;
 ;;   Source parsing
 ;;
@@ -111,8 +122,8 @@
 ;; of code in braces) in the current buffer, with support for
 ;; `next-error'.
 ;;
-;; Parsing is also used for Imenu support and for navigation commands,
-;; these are installed by `javaimp-minor-mode'.
+;; Parsing is also used for Imenu support, for xref support and for
+;; navigation commands, these are installed by `javaimp-minor-mode'.
 ;;
 ;; `javaimp-imenu-use-sub-alists': if non-nil then Imenu items are
 ;; presented in a nested fashion, instead of a flat list (default is
@@ -274,15 +285,17 @@ cache not updated."
                   cached-file)
             (javaimp-cached-file-value cached-file)))
       (t
-       ;; Clear on any error
+       ;; Clear on any signal
        (setf (alist-get filename (symbol-value cache-sym) nil 'remove #'string=) nil)
        (signal (car err) (cdr err))))))
 
-(defun javaimp--collect-from-files (fun files cache-sym what-desc)
+(defun javaimp--collect-from-files (fun files cache-sym what-desc
+                                        &optional no-progress-report)
   "Collect values for FILES in a flat list.  Each element in FILES
 should be a file name, or a cons where car is a file name.  FUN
 and CACHE-SYM are passed to `javaimp--collect-from-file', which
-see.  WHAT-DESC is included in the messages."
+see.  WHAT-DESC is included in the messages.  NO-PROGRESS-REPORT,
+when non-nil, prevents progress reporter creation."
   (let (tmp unread res errors)
     ;; Collect from cache hits
     (dolist (file files)
@@ -292,25 +305,29 @@ see.  WHAT-DESC is included in the messages."
         (setq res (nconc res (copy-sequence tmp)))))
     ;; Now read all cache misses
     (when unread
-      (let ((reporter (make-progress-reporter
-                       (format "Reading %d %s files (%d taken from cache) ..."
-                               (length unread) what-desc
-                               (- (length files) (length unread)))
-                       0 (length unread)))
+      (let ((reporter (unless no-progress-report
+                        (make-progress-reporter
+                         (format "Reading %d %s files (%d taken from cache) ..."
+                                 (length unread) what-desc
+                                 (- (length files) (length unread)))
+                         0 (length unread))))
             (i 0)
             filename)
         (dolist (file unread)
           (setq filename (if (consp file) (car file) file)
                 tmp (condition-case err
                         (javaimp--collect-from-file file cache-sym fun)
-                      (t
+                      (error
                        (push (concat filename ": " (error-message-string err))
                              errors)
                        nil)))
-          (setq res (nconc res (copy-sequence tmp)))
+          (when tmp
+            (setq res (nconc res (copy-sequence tmp))))
           (setq i (1+ i))
-          (progress-reporter-update reporter i filename))
-        (progress-reporter-done reporter)))
+          (when reporter
+            (progress-reporter-update reporter i filename)))
+        (when reporter
+          (progress-reporter-done reporter))))
     (when errors
       (with-output-to-temp-buffer "*Javaimp errors*"
         (princ javaimp--jar-error-header)
@@ -365,16 +382,16 @@ Finally, already parsed buffers are processed in
        (when unparsed-bufs
          (let (tmp)
            (dolist-with-progress-reporter (buf unparsed-bufs tmp)
-               (format "Parsing %d buffers..." (length unparsed-bufs))
+               (format "Parsed %d yet unparsed buffers..." (length unparsed-bufs))
              (setq tmp (nconc tmp (funcall fun buf nil))))))
        ;; Read parsed buffers - usually will be quick
        (when parsed-bufs
          (with-delayed-message
-             (1 (format "Reading %d buffers..." (length parsed-bufs)))
-           (seq-mapcat (lambda (buf)
-                         (funcall fun buf nil))
-                       parsed-bufs)))))))
-
+               (1 (format "Reading %d parsed buffers..." (length parsed-bufs)))
+           (mapcan
+            (lambda (buf)
+              (funcall fun buf nil))
+            parsed-bufs)))))))
 
 (defun javaimp--get-current-source-dir ()
   "Try to determine current root source directory from 'package'
@@ -394,25 +411,20 @@ then just return `default-directory'."
 
 ;; Subroutines for identifiers
 
-(defun javaimp--read-dir-source-idents (dir what-desc)
+(defun javaimp--read-dir-source-idents (scope-pred dir what-desc)
   (javaimp--collect-from-source-dir
-   #'javaimp--collect-identifiers dir 'javaimp--source-idents-cache what-desc))
+   (apply-partially #'javaimp--collect-idents scope-pred)
+    dir 'javaimp--source-idents-cache what-desc))
 
-(defun javaimp--collect-identifiers (buf file)
-  "Return all identifiers in buffer BUF, which is temporary if FILE
-is non-nil.  Suitable for use with
-`javaimp--collect-from-source-dir', which see."
+(defun javaimp--collect-idents (scope-pred buf file)
+  "Return all identifiers satisfying SCOPE-PRED in buffer BUF,
+which is temporary if FILE is non-nil."
   (with-current-buffer buf
     (save-excursion
       (save-restriction
         (widen)
-        (let* ((javaimp-parse--scope-hook ;optimization
-                (if file
-                    #'javaimp-parse--scope-class
-                  javaimp-parse--scope-hook))
-               (package (javaimp-parse-get-package))
-               (scopes (javaimp-parse-get-all-scopes
-                        nil nil (javaimp-scope-defun-p))))
+        (let* ((package (javaimp-parse-get-package))
+               (scopes (javaimp-parse-get-all-scopes nil nil scope-pred)))
           (mapcar (lambda (s)
                     (goto-char (javaimp-scope-open-brace s))
                     (propertize (javaimp-scope-name s)
@@ -557,10 +569,11 @@ build the list each time because jars may change."
      'javaimp--jar-idents-cache
      (concat (javaimp-print-id (javaimp-module-id module)) " dep jars"))))
 
-(defun javaimp--collect-module-dep-jars-with-source-idents (module)
-  "Return list of identifiers from MODULE's dependencies for which
-we know where the source is.  The list is cached by _artifact
-file_, so cache is refreshed only when artifact is rebuilt."
+(defun javaimp--collect-module-dep-jars-with-source-idents (scope-pred module)
+  "Return list of identifiers satisfying SCOPE-PRED from MODULE's
+dependencies for which we know where the source is.  The list is
+cached by _artifact file_, so cache is refreshed only when
+artifact is rebuilt."
   (javaimp--collect-from-files
    (lambda (artifact-and-id)
      (let* ((mod-id (cdr artifact-and-id))
@@ -568,14 +581,18 @@ file_, so cache is refreshed only when artifact is rebuilt."
                   (lambda (m)
                     (equal (javaimp-module-id m) mod-id)))))
        (if mod
-           (javaimp--read-module-source-idents mod)
+           (javaimp--read-module-source-idents scope-pred mod)
          (error "Could not find module %s!  Please re-visit its \
 top-level project." (javaimp-print-id mod-id)))))
    (javaimp-module-dep-jars-with-source module)
    'javaimp--module-idents-cache
-   (concat (javaimp-print-id (javaimp-module-id module)) " dep sources")))
+   (concat (javaimp-print-id (javaimp-module-id module)) " dep sources")
+   ;; We have "inner" loop inside the function passed to
+   ;; javaimp--collect-from-files, so don't report progress on "outer"
+   ;; loop
+   t))
 
-(defun javaimp--read-module-source-idents (module)
+(defun javaimp--read-module-source-idents (scope-pred module)
   (let ((source-dirs
          (append
           (javaimp-module-source-dirs module)
@@ -585,8 +602,9 @@ top-level project." (javaimp-print-id mod-id)))))
                   javaimp-additional-source-dirs))))
     (seq-mapcat (lambda (dir)
                   (javaimp--read-dir-source-idents
-                   dir (concat (javaimp-print-id (javaimp-module-id module))
-                               " source")))
+                   scope-pred dir
+                   (concat (javaimp-print-id (javaimp-module-id module))
+                           " source")))
                 source-dirs)))
 
 
@@ -630,23 +648,27 @@ its jar dependencies, as well as its source dependencies.
 `javaimp--get-current-source-dir')."
   (interactive
    (let* ((module (javaimp--detect-module))
+          (scope-pred (javaimp-scope-defun-p))
           (classes
            (nconc
-            ;; jdk
+            ;; JDK
             (when javaimp-java-home
               (javaimp--get-jdk-classes javaimp-java-home))
             (when module
               (nconc
+               ;; Jar dependencies
                (javaimp--collect-module-dep-jars-classes module)
+               ;; Source dependencies
                (mapcar #'javaimp--ident-to-fqcn
                        (javaimp--collect-module-dep-jars-with-source-idents
-                        module))))
+                        scope-pred module))))
             ;; Current module or source tree
             (mapcar #'javaimp--ident-to-fqcn
                     (if module
-                        (javaimp--read-module-source-idents module)
+                        (javaimp--read-module-source-idents scope-pred module)
                       (javaimp--read-dir-source-idents
-                       (javaimp--get-current-source-dir) "current source")))))
+                       scope-pred (javaimp--get-current-source-dir)
+                       "current source")))))
           (completion-regexp-list
            (and (not current-prefix-arg)
                 (symbol-at-point)
@@ -857,32 +879,44 @@ in a major mode hook."
 
 (defun javaimp-xref--backend () 'javaimp)
 
-(defun javaimp-xref--module-completion-table ()
-  (if-let ((module (javaimp--detect-module)))
-      (nconc
-       (javaimp--collect-module-dep-jars-with-source-idents module)
-       (javaimp--read-module-source-idents module))
-    (javaimp--read-dir-source-idents
-     (javaimp--get-current-source-dir) "current source")))
+(defun javaimp-xref--ident-completion-table ()
+  (let ((scope-pred (javaimp-scope-defun-p '(method)))
+        (module (javaimp--detect-module)))
+    (if module
+        (nconc
+         (javaimp--collect-module-dep-jars-with-source-idents scope-pred module)
+         (javaimp--read-module-source-idents scope-pred module))
+      (javaimp--read-dir-source-idents
+       scope-pred (javaimp--get-current-source-dir) "current source"))))
 
 (cl-defmethod xref-backend-identifier-completion-table ((_backend (eql 'javaimp)))
-  (javaimp-xref--module-completion-table))
+  (javaimp-xref--ident-completion-table))
+
+(defun javaimp-xref--ident-definition (ident)
+  (let* ((file (get-text-property 0 'file ident))
+         (buf (get-file-buffer file))
+         (loc (if buf
+                  (xref-make-buffer-location
+                   buf (get-text-property 0 'pos ident))
+                (xref-make-file-location
+                 file
+                 (get-text-property 0 'line ident)
+                 (get-text-property 0 'column ident)))))
+    (xref-make ident loc)))
 
 (cl-defmethod xref-backend-definitions ((_backend (eql 'javaimp)) identifier)
-  (let* ((comp-table (javaimp-xref--module-completion-table))
+  (let* ((comp-table (javaimp-xref--ident-completion-table))
          (identifiers (all-completions identifier comp-table)))
-    (mapcar (lambda (ident)
-              (let* ((file (get-text-property 0 'file ident))
-                     (buf (get-file-buffer file))
-                     (loc (if buf
-                              (xref-make-buffer-location
-                               buf (get-text-property 0 'pos ident))
-                            (xref-make-file-location
-                             file
-                             (get-text-property 0 'line ident)
-                             (get-text-property 0 'column ident)))))
-                (xref-make ident loc)))
-            identifiers)))
+    (mapcar #'javaimp-xref--ident-definition identifiers)))
+
+(cl-defmethod xref-backend-apropos ((_backend (eql 'javaimp)) pattern)
+  (let* ((comp-table (javaimp-xref--ident-completion-table))
+         (identifiers (seq-filter
+                       (apply-partially #'string-match
+                                        (xref-apropos-regexp pattern))
+                       comp-table)))
+    (mapcar #'javaimp-xref--ident-definition
+            (sort identifiers #'string-lessp))))
 
 
 

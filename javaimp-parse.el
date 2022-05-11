@@ -356,7 +356,8 @@ brace.")
                             :start keyword-start)))))
 
 (defun javaimp-parse--scope-simple-stmt (_brace-pos)
-  "Attempts to parse 'simple-statement' scope."
+  "Attempts to parse 'simple-statement' scope.  Currently block
+lambdas are also recognized as such."
   (and (javaimp-parse--skip-back-until)
        (or (and (= (char-before (1- (point))) ?-) ; ->
                 (= (char-before) ?>))
