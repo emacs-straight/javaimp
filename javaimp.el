@@ -1063,35 +1063,59 @@ buffer."
   "Function to be used as `beginning-of-defun-function'."
   (if (zerop arg)
       t
-    (when (> arg 0) (setq arg (1- arg)))
     (let* ((ctx (javaimp--get-sibling-context))
-           (prev-idx (or (nth 2 ctx) -1))
-           (siblings (nthcdr 3 ctx))
-           (target-idx (- prev-idx arg)))
+           (parent-beg (nth 0 ctx))
+           (parent-end (nth 1 ctx))
+           (offset-from-prev (if (> arg 0)
+                                 (1- arg)
+                               arg))
+           (target-idx (- (nth 2 ctx) offset-from-prev))
+           (siblings (nthcdr 3 ctx)))
       (cond ((or (not siblings) (< target-idx 0))
-             (goto-char (nth 0 ctx))
-             nil)
+             (when (= (abs arg) 1)
+               ;; Special case: ok to move to floor.  If there's
+               ;; parent - try to skip its decl prefix too.
+               (goto-char (if parent-beg
+                              (or (javaimp--beg-of-defun-decl parent-beg)
+                                  parent-beg)
+                            (point-min)))))
             ((>= target-idx (length siblings))
-             (goto-char (nth 1 ctx))
-             nil)
+             (when (= (abs arg) 1)
+               ;; Special case: ok to move to ceil.
+               (goto-char (or parent-end (point-max)))))
             (t
-             (goto-char (javaimp-scope-open-brace
-                         (nth target-idx siblings))))))))
+             (let ((scope (nth target-idx siblings)))
+               (goto-char (or (javaimp--beg-of-defun-decl
+                               (javaimp-scope-start scope) parent-beg)
+                              (javaimp-scope-open-brace scope)))))))))
+
+(defun javaimp--beg-of-defun-decl (pos &optional bound)
+  "Subroutine of `javaimp-beginning-of-defun'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char pos)
+      (javaimp-parse-get-defun-decl-start bound))))
 
 (defun javaimp-end-of-defun ()
   "Function to be used as `end-of-defun-function'."
-  (when (javaimp-scope-p
-         (get-text-property (point) 'javaimp-parse-scope))
+  (when-let* ((brace-pos
+               (next-single-property-change (point) 'javaimp-parse-scope))
+              ((get-text-property brace-pos 'javaimp-parse-scope)))
     (ignore-errors
       (goto-char
-       (scan-lists (point) 1 0)))))
+       (scan-lists brace-pos 1 0)))))
 
 (defun javaimp--get-sibling-context ()
-  "Return list of the form (FLOOR CEILING PREV-INDEX . SIBLINGS),
-where SIBLINGS is a list of all sibling defun scopes.  PREV-INDEX
-is the index of the \"previous\" (relative to point) scope in
-this list, or nil.  FLOOR and CEILING are positions before and
-after this group of defuns."
+  "Return list of the form (PARENT-BEG PARENT-END PREV-INDEX .
+ SIBLINGS), where SIBLINGS is a list of all sibling defun scopes.
+PREV-INDEX is the index of the \"previous\" (relative to point)
+scope in this list, or -1.  PARENT-BEG and PARENT-END are the
+positions of beginning and end of parent defun, if any.
+
+Both when we're inside a method and between methods, the parent
+is the method's enclosing class.  When we're inside the method,
+PREV-INDEX gives the index of the method itself."
   (save-excursion
     (save-restriction
       (widen)
@@ -1109,10 +1133,9 @@ after this group of defuns."
                 ;; defuns whose parent is enc.
                 enc))
              (parent-beg (and parent (javaimp-scope-open-brace parent)))
-             (parent-end (and parent
-                              (ignore-errors
-                                (scan-lists
-                                 (javaimp-scope-open-brace parent) 1 0))))
+             (parent-end (when parent-beg
+                           (ignore-errors
+                             (scan-lists parent-beg 1 0))))
              (sibling-pred (javaimp-scope-same-parent-p parent))
              (siblings
               (javaimp-parse-get-all-scopes
@@ -1131,13 +1154,16 @@ after this group of defuns."
                           (reverse siblings)))))
         (nconc
          (list
-          (or parent-beg (point-min))
-          (or parent-end (point-max))
-          (and prev
-               (seq-position siblings prev
-                             (lambda (s1 s2)
-                               (= (javaimp-scope-open-brace s1)
-                                  (javaimp-scope-open-brace s2))))))
+          ;; Return start, not open brace, as this is where we'll go
+          ;; when no sibling
+          (and parent (javaimp-scope-start parent))
+          parent-end
+          (or (and prev
+                   (seq-position siblings prev
+                                 (lambda (s1 s2)
+                                   (= (javaimp-scope-open-brace s1)
+                                      (javaimp-scope-open-brace s2)))))
+              -1))
          siblings)))))
 
 
@@ -1195,7 +1221,8 @@ using Javaimp facilities.
                       #'javaimp-end-of-defun)
         (add-function :override (local 'add-log-current-defun-function)
                       #'javaimp-add-log-current-defun)
-        (add-hook 'xref-backend-functions #'javaimp-xref--backend nil t))
+        (add-hook 'xref-backend-functions #'javaimp-xref--backend nil t)
+        (setq-local imenu-space-replacement nil))
     (remove-function (local 'imenu-create-index-function)
                      #'javaimp-imenu-create-index)
     (remove-function (local 'beginning-of-defun-function)
@@ -1204,7 +1231,8 @@ using Javaimp facilities.
                      #'javaimp-end-of-defun)
     (remove-function (local 'add-log-current-defun-function)
                      #'javaimp-add-log-current-defun)
-    (remove-hook 'xref-backend-functions #'javaimp-xref--backend t)))
+    (remove-hook 'xref-backend-functions #'javaimp-xref--backend t)
+    (kill-local-variable 'imenu-space-replacement)))
 
 
 ;;;###autoload

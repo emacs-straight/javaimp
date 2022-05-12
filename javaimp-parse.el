@@ -91,6 +91,9 @@ anything in the buffer.  A marker pointing nowhere means
 everything's up-to-date.")
 
 
+
+;; Low-level subroutines
+
 (defsubst javaimp-parse--substr-before-< (str)
   (let ((end (string-search "<" str)))
     (if end
@@ -245,6 +248,38 @@ is unchanged."
       ;; just return to start
       (goto-char pos)
       nil)))
+
+(defun javaimp-parse--decl-prefix (&optional bound)
+  "Attempt to parse defun declaration prefix backwards from
+point (but not farther than BOUND).  Matches inside comments /
+strings are skipped.  Return the beginning of the match (then the
+point is also at that position) or nil (then the point is left
+unchanged)."
+  ;; If we skip a previous scope (including unnamed initializers), or
+  ;; reach enclosing scope start, we'll fail the check in the below
+  ;; loop.  But a semicolon, which delimits statements, will just be
+  ;; skipped by scan-sexps, so find it and use as bound.  If it is in
+  ;; another scope, that's not a problem, for the same reasons as
+  ;; described above.
+  (let* ((prev-semi (save-excursion
+                      (javaimp-parse--rsb-keyword ";" bound t)))
+         (bound (when (or bound prev-semi)
+                  (apply #'max
+                         (delq nil
+                               (list bound
+                                     (and prev-semi (1+ prev-semi)))))))
+         pos res)
+    (with-syntax-table javaimp--arglist-syntax-table
+      (while (and (ignore-errors
+                    (setq pos (scan-sexps (point) -1)))
+                  (or (not bound) (>= pos bound))
+                  (or (member (char-after pos)
+                              '(?@ ?\(  ;annotation type / args
+                                   ?<)) ;generic type
+                      ;; keyword / identifier first char
+                      (= (char-syntax pos) ?w)))
+        (goto-char (setq res pos))))
+    res))
 
 
 ;;; Scopes
@@ -668,6 +703,15 @@ it with PRED, and its parents with PARENT-PRED."
       (javaimp-scope-filter-parents scope parent-pred))
     scope))
 
+(defun javaimp-parse-get-defun-decl-start (&optional bound)
+  "Return the position of the start of defun declaration at point,
+but not before BOUND.  Point should be at defun name, but
+actually can be anywhere within the declaration, as long as it's
+outside paren constructs like arg-list."
+  (save-excursion
+    (javaimp-parse--all-scopes))
+  (javaimp-parse--decl-prefix bound))
+
 (defun javaimp-parse-get-class-abstract-methods ()
   "Return all scopes which are abstract methods in classes."
   (javaimp-parse--all-scopes)
@@ -683,11 +727,11 @@ it with PRED, and its parents with PARENT-PRED."
     (seq-mapcat #'javaimp-parse--interface-abstract-methods
                 interfaces)))
 
+
 (defun javaimp-parse-fully-parsed-p ()
   "Return non-nil if current buffer is fully parsed."
   (and javaimp-parse--dirty-pos
        (not (marker-position javaimp-parse--dirty-pos))))
-
 
 (defmacro javaimp-parse-without-hook (&rest body)
   "Execute BODY, temporarily removing
