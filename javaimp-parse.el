@@ -79,6 +79,9 @@ regexp.  First group is directive, second group is identifier."
     (modify-syntax-entry ?< "(>" st)
     (modify-syntax-entry ?> ")<" st)
     (modify-syntax-entry ?. "_" st) ; separates parts of fully-qualified type
+    ;; Override prefix syntax so that scan-sexps right after @ in
+    ;; annotation doesn't ignore it.
+    (modify-syntax-entry ?@ "_" st)
     st)
   "Enables parsing angle brackets as lists")
 
@@ -192,8 +195,9 @@ function is to just skip whitespace / comments."
                  ;; move out of comment/string if in one
                  (goto-char (nth 8 state)))
                 ((and (not (bobp))
-                      ;; FIXME use syntax-after instead
-                      (member (char-syntax (char-before)) '(?> ?!)))
+                      (memql (syntax-class (syntax-after (1- (point))))
+                             ;; comment end, generic comment
+                             '(12 14)))
                  (backward-char))
                 ((funcall stop-p last-what last-pos)
                  (throw 'done (if (and last-what last-pos)
@@ -201,7 +205,7 @@ function is to just skip whitespace / comments."
                                 t)))
                 ((bobp)
                  (throw 'done nil))
-                ((= (char-syntax (char-before)) ?\))
+                ((= (syntax-class (syntax-after (1- (point)))) 5) ;close-paren
                  (backward-list)
                  (setq last-what 'list
                        last-pos (point)))
@@ -255,31 +259,38 @@ point (but not farther than BOUND).  Matches inside comments /
 strings are skipped.  Return the beginning of the match (then the
 point is also at that position) or nil (then the point is left
 unchanged)."
-  ;; If we skip a previous scope (including unnamed initializers), or
-  ;; reach enclosing scope start, we'll fail the check in the below
-  ;; loop.  But a semicolon, which delimits statements, will just be
-  ;; skipped by scan-sexps, so find it and use as bound.  If it is in
-  ;; another scope, that's not a problem, for the same reasons as
-  ;; described above.
-  (let* ((prev-semi (save-excursion
-                      (javaimp-parse--rsb-keyword ";" bound t)))
-         (bound (when (or bound prev-semi)
-                  (apply #'max
-                         (delq nil
-                               (list bound
-                                     (and prev-semi (1+ prev-semi)))))))
-         pos res)
-    (with-syntax-table javaimp--arglist-syntax-table
-      (while (and (ignore-errors
-                    (setq pos (scan-sexps (point) -1)))
-                  (or (not bound) (>= pos bound))
-                  (or (member (char-after pos)
-                              '(?@ ?\(  ;annotation type / args
-                                   ?<)) ;generic type
-                      ;; keyword / identifier first char
-                      (= (char-syntax pos) ?w)))
-        (goto-char (setq res pos))))
-    res))
+  (with-syntax-table javaimp-syntax-table
+    (let ((state (syntax-ppss))
+          prev-semi pos res)
+      ;; Move out of any comment/string
+      (when (nth 8 state)
+	(goto-char (nth 8 state))
+	(setq state (syntax-ppss)))
+      ;; If we skip a previous scope (including unnamed initializers),
+      ;; or reach enclosing scope start, we'll fail the check in the
+      ;; below loop.  But a semicolon, which delimits statements, will
+      ;; just be skipped by scan-sexps, so find it and use as bound.
+      ;; If it is in another scope, that's not a problem, for the same
+      ;; reasons as described above.
+      (setq prev-semi (save-excursion
+                        (javaimp-parse--rsb-keyword ";" bound t))
+            bound (when (or bound prev-semi)
+                    (apply #'max
+                           (delq nil
+                                 (list bound
+                                       (and prev-semi (1+ prev-semi)))))))
+      ;; Go back by sexps
+      (with-syntax-table javaimp--arglist-syntax-table
+        (while (and (ignore-errors
+                      (setq pos (scan-sexps (point) -1)))
+                    (or (not bound) (>= pos bound))
+                    (or (member (char-after pos)
+                                '(?@ ?\( ;annotation type / args
+                                     ?<)) ;generic type
+                        ;; keyword / identifier first char
+                        (= (syntax-class (syntax-after pos)) 2))) ;word
+          (goto-char (setq res pos))))
+      res)))
 
 
 ;;; Scopes
