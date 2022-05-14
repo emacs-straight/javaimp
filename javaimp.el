@@ -129,6 +129,7 @@
 ;; presented in a nested fashion, instead of a flat list (default is
 ;; flat list).
 
+
 ;;; Code:
 
 (require 'javaimp-util)
@@ -1224,6 +1225,7 @@ PREV-INDEX gives the index of the method itself."
   "C-M-a" #'beginning-of-defun
   "C-M-e" #'end-of-defun)
 
+
 ;;;###autoload
 (define-minor-mode javaimp-minor-mode
   "Javaimp minor mode.
@@ -1247,7 +1249,12 @@ defun javadoc to be included in the narrowed region when using
                       #'javaimp-end-of-defun)
         (add-function :override (local 'add-log-current-defun-function)
                       #'javaimp-add-log-current-defun)
+        (add-hook 'after-change-functions #'javaimp-parse--update-dirty-pos nil t)
         (add-hook 'xref-backend-functions #'javaimp-xref--backend nil t)
+        (setq-local parse-sexp-ignore-comments t)
+        (setq-local multibyte-syntax-as-symbol t)
+        ;; Discard parse state, if any
+        (setq javaimp-parse--dirty-pos nil)
         ;; There're spaces within generic types, just show them
         (setq-local imenu-space-replacement nil))
     (remove-function (local 'imenu-create-index-function)
@@ -1258,7 +1265,10 @@ defun javadoc to be included in the narrowed region when using
                      #'javaimp-end-of-defun)
     (remove-function (local 'add-log-current-defun-function)
                      #'javaimp-add-log-current-defun)
+    (remove-hook 'after-change-functions #'javaimp-parse--update-dirty-pos t)
     (remove-hook 'xref-backend-functions #'javaimp-xref--backend t)
+    (kill-local-variable 'parse-sexp-ignore-comments)
+    (kill-local-variable 'multibyte-syntax-as-symbol)
     (kill-local-variable 'imenu-space-replacement)))
 
 

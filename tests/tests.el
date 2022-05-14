@@ -6,12 +6,11 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
-(require 'ert-x)
 (require 'javaimp)
+(require 'javaimp-tests)
 
 (ert-deftest javaimp-collect-idents ()
-  (with-temp-buffer
-    (insert-file-contents (ert-resource-file "test1.java"))
+  (javaimp-with-temp-buffer "test1.java"
     (should (equal (mapcar #'javaimp--ident-to-fqcn
                            (javaimp--collect-idents
                             (javaimp-scope-defun-p) (current-buffer) t))

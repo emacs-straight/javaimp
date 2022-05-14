@@ -21,4 +21,15 @@ supplying that directory name as the only arg."
           (funcall handler tmpdir)
         (error "Cannot untar test data file %s: %d" filename rc)))))
 
+(defmacro javaimp-with-temp-buffer (file &rest body)
+  "Execute BODY in temporary buffer with `javaimp-minor-mode'
+turned on.  If FILE is non-nil then its contents are inserted."
+  (declare (debug t) (indent 1))
+  `(with-temp-buffer
+     (when ,file
+       (insert-file-contents (ert-resource-file ,file)))
+     (java-mode)
+     (javaimp-minor-mode)
+     ,@body))
+
 (provide 'javaimp-tests)

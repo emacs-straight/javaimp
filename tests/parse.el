@@ -6,9 +6,8 @@
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
 
 (require 'ert)
-(require 'ert-x)
-(require 'javaimp-parse)
-(require 'javaimp-util)
+(require 'javaimp)
+(require 'javaimp-tests)
 
 ;; Tests for parse helpers
 
@@ -35,7 +34,7 @@
                    ("int" . "i")
                    ("String[][]" . "arr"))
                   ))
-    (with-temp-buffer
+    (javaimp-with-temp-buffer nil
       (insert (car data))
       (should (equal (javaimp-parse--arglist (point-min) (point-max))
                      (cdr data))))))
@@ -57,10 +56,59 @@
 Exception4<? super Exception5>>")
                    ("Exception6")
                    ("Exception7<Exception8>"))))
-    (with-temp-buffer
+    (javaimp-with-temp-buffer nil
       (insert (car data))
       (should (equal (javaimp-parse--arglist (point-min) (point-max) t)
                      (cdr data))))))
+
+(ert-deftest javaimp-parse-decl-prefix ()
+  (dolist (data '(;; simple
+                  (" void " . 2)
+                  (" public static void " . 2)
+
+                  ;; no sexps
+                  (" ")
+                  ;; incomplete sexps
+                  ("var)")
+                  (")   ")
+
+                  ;; don't go over / into braces
+                  ("{  } void" . 6)
+                  ("} void" . 3)
+                  ;; don't go into parens
+                  (") void" . 3)
+
+                  ;; comments
+                  ("\
+  /**
+   * javadoc1
+   */
+  public
+  // line comment
+  /**
+   * javadoc2
+   */
+  void " . 29)
+
+                  ;; annotations
+                  ("\
+  @Annotation1
+  @Annotation2(value = \"foo\")
+  @Annotation3({@Ann4(value = \"bar\"), @Ann4})
+  void " . 3)
+
+                  ;; generics
+                  ("public <T extends S> T " . 1)
+                  ("<T extends S> T " . 1)
+                  ;; don't go into incomplete generic
+                  ("S> T " . 4)
+
+                  ;; don't go over semicolon
+                  ("foo(); void " . 8)))
+    (javaimp-with-temp-buffer nil
+      (insert (car data))
+      (should (equal (cdr data)
+                     (javaimp-parse--decl-prefix))))))
 
 
 
@@ -69,7 +117,7 @@ Exception4<? super Exception5>>")
 (defun javaimp-test-parse--scope (parser &rest test-items)
   (declare (indent 1))
   (dolist (item test-items)
-    (with-temp-buffer
+    (javaimp-with-temp-buffer nil
       (insert (nth 0 item))
       (let* ((javaimp-parse--scope-hook
               (lambda (arg)
@@ -281,7 +329,7 @@ throws E1 {"
     (nreverse res)))
 
 (ert-deftest javaimp-parse-get-package ()
-  (with-temp-buffer
+  (javaimp-with-temp-buffer nil
     (insert "
   package  foo.bar.baz  ;
 //package commented.line;
@@ -292,7 +340,7 @@ package commented.block;
     (should (equal (javaimp-parse-get-package) "foo.bar.baz"))))
 
 (ert-deftest javaimp-parse-get-imports ()
-  (with-temp-buffer
+  (javaimp-with-temp-buffer nil
     (insert "
   import  some.class1  ;
 import  static  some.class.fun1;
@@ -316,8 +364,7 @@ import static some_class.fun_2; // comment
                ("some_class.fun_2" . static))))))
 
 (ert-deftest javaimp-parse-get-all-scopes ()
-  (with-temp-buffer
-    (insert-file-contents (ert-resource-file "test1.java"))
+  (javaimp-with-temp-buffer "test1.java"
     (should-not javaimp-parse--dirty-pos)
     ;;
     ;; parse full buffer
@@ -363,8 +410,7 @@ import static some_class.fun_2; // comment
            ;; eob
            ((goto-char (point-max))))))
     (dolist (testcase testcases)
-      (with-temp-buffer
-        (insert-file-contents (ert-resource-file "test1.java"))
+      (javaimp-with-temp-buffer "test1.java"
         (eval (car testcase))           ;move
         (should
          (equal (cdr testcase)

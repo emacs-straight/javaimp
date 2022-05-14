@@ -70,21 +70,19 @@ regexp.  First group is directive, second group is identifier."
   (javaimp-parse--directive-regexp "import\\(?:[[:space:]]+static\\)?"))
 
 
-(defvar javaimp-syntax-table
-  (make-syntax-table java-mode-syntax-table) ;TODO don't depend on cc-mode
-  "Javaimp syntax table")
-
-(defvar javaimp--arglist-syntax-table
-  (let ((st (make-syntax-table javaimp-syntax-table)))
+(defvar javaimp--parse-syntax-table
+  ;; TODO don't depend on cc-mode
+  (let ((st (make-syntax-table java-mode-syntax-table)))
+    ;; To be able to skip over generic types as over lists
     (modify-syntax-entry ?< "(>" st)
     (modify-syntax-entry ?> ")<" st)
-    (modify-syntax-entry ?. "_" st) ; separates parts of fully-qualified type
-    ;; Override prefix syntax so that scan-sexps right after @ in
-    ;; annotation doesn't ignore it.
+    ;; Dot separates parts of fully-qualified type
+    (modify-syntax-entry ?. "_" st) ;
+    ;; Override prefix syntax so that scan-sexps backwards right after
+    ;; @ in annotation doesn't ignore it.
     (modify-syntax-entry ?@ "_" st)
     st)
-  "Enables parsing angle brackets as lists")
-
+  "Syntax table used in parsing.")
 
 (defvar-local javaimp-parse--dirty-pos nil
   "Marker which points to a buffer position after which all parsed
@@ -123,7 +121,7 @@ non-nil, then name parsing is skipped."
   (let ((substr (buffer-substring-no-properties beg end)))
     (with-temp-buffer
       (insert substr)
-      (with-syntax-table javaimp--arglist-syntax-table
+      (with-syntax-table javaimp--parse-syntax-table
         (ignore-errors
           (let (res)
             (while (progn
@@ -237,7 +235,7 @@ is unchanged."
     (catch 'found
       (while (javaimp-parse--rsb-keyword regexp bound t)
         (let ((scan-pos (match-end 0)))
-          (with-syntax-table javaimp--arglist-syntax-table
+          (with-syntax-table javaimp--parse-syntax-table
             ;; Skip over any number of lists, which may be exceptions
             ;; in "throws", or something like that
             (while (and scan-pos (<= scan-pos brace-pos))
@@ -259,38 +257,33 @@ point (but not farther than BOUND).  Matches inside comments /
 strings are skipped.  Return the beginning of the match (then the
 point is also at that position) or nil (then the point is left
 unchanged)."
-  (with-syntax-table javaimp-syntax-table
-    (let ((state (syntax-ppss))
-          prev-semi pos res)
-      ;; Move out of any comment/string
-      (when (nth 8 state)
-	(goto-char (nth 8 state))
-	(setq state (syntax-ppss)))
-      ;; If we skip a previous scope (including unnamed initializers),
-      ;; or reach enclosing scope start, we'll fail the check in the
-      ;; below loop.  But a semicolon, which delimits statements, will
-      ;; just be skipped by scan-sexps, so find it and use as bound.
-      ;; If it is in another scope, that's not a problem, for the same
-      ;; reasons as described above.
-      (setq prev-semi (save-excursion
-                        (javaimp-parse--rsb-keyword ";" bound t))
-            bound (when (or bound prev-semi)
-                    (apply #'max
-                           (delq nil
-                                 (list bound
-                                       (and prev-semi (1+ prev-semi)))))))
-      ;; Go back by sexps
-      (with-syntax-table javaimp--arglist-syntax-table
-        (while (and (ignore-errors
-                      (setq pos (scan-sexps (point) -1)))
-                    (or (not bound) (>= pos bound))
-                    (or (member (char-after pos)
-                                '(?@ ?\( ;annotation type / args
-                                     ?<)) ;generic type
-                        ;; keyword / identifier first char
-                        (= (syntax-class (syntax-after pos)) 2))) ;word
-          (goto-char (setq res pos))))
-      res)))
+  (javaimp-parse--skip-back-until)
+  ;; If we skip a previous scope (including unnamed initializers), or
+  ;; reach enclosing scope start, we'll fail the check in the below
+  ;; loop.  But a semicolon, which delimits statements, will just be
+  ;; skipped by scan-sexps, so find it and use as bound.  If it is in
+  ;; another scope, that's not a problem, for the same reasons as
+  ;; described above.
+  (let* ((prev-semi (save-excursion
+                      (javaimp-parse--rsb-keyword ";" bound t)))
+         (bound (when (or bound prev-semi)
+                  (apply #'max
+                         (delq nil
+                               (list bound
+                                     (and prev-semi (1+ prev-semi)))))))
+         pos res)
+    ;; Go back by sexps
+    (with-syntax-table javaimp--parse-syntax-table
+      (while (and (ignore-errors
+                    (setq pos (scan-sexps (point) -1)))
+                  (or (not bound) (>= pos bound))
+                  (or (memql (char-after pos)
+                             '(?@ ?\(   ;annotation type / args
+                                  ?<))  ;generic type
+                      ;; keyword / identifier first char
+                      (= (syntax-class (syntax-after pos)) 2))) ;word
+        (goto-char (setq res pos))))
+    res))
 
 
 ;;; Scopes
@@ -490,7 +483,6 @@ lambdas are also recognized as such."
                            :start nil)))
 
 
-
 (defun javaimp-parse--scopes (count)
   "Attempts to parse COUNT enclosing scopes at point.
 Returns most nested one, with its parents sets accordingly.  If
@@ -545,57 +537,54 @@ nothing."
         (setq res (cdr res)))
       parent)))
 
+
 (defun javaimp-parse--all-scopes ()
-  "Parses all scopes in this buffer which are after
+  "Parse all scopes in this buffer which are after
 `javaimp-parse--dirty-pos', if it points anywhere.  Makes it
-point nowhere when done."
-  (unless javaimp-parse--dirty-pos      ;init on first use
-    (setq javaimp-parse--dirty-pos (point-min-marker))
-    (javaimp-parse--setup-buffer))
+point nowhere when done.  All entry-point functions will usually
+call this function first."
+  (unless javaimp-parse--dirty-pos
+    (setq javaimp-parse--dirty-pos (point-min-marker)))
   (when (marker-position javaimp-parse--dirty-pos)
     (with-silent-modifications          ;we update only private props
       (remove-text-properties javaimp-parse--dirty-pos (point-max)
                               '(javaimp-parse-scope nil))
       (goto-char (point-max))
-      (let ((parse-sexp-ignore-comments t)
-            ;; Can be removed when we no longer rely on cc-mode
+      (let (;; Can be removed when we no longer rely on cc-mode
             (parse-sexp-lookup-properties nil))
-        (with-syntax-table javaimp-syntax-table
-          (while (javaimp-parse--rsb-keyword "{" javaimp-parse--dirty-pos t)
-            (save-excursion
-              (forward-char)
-              ;; Set props at this brace and all the way up
-              (javaimp-parse--scopes nil))))))
+        (while (javaimp-parse--rsb-keyword "{" javaimp-parse--dirty-pos t)
+          (save-excursion
+            (forward-char)
+            ;; Set props at this brace and all the way up
+            (javaimp-parse--scopes nil)))))
     (set-marker javaimp-parse--dirty-pos nil)))
 
-(defun javaimp-parse--setup-buffer ()
-  ;; FIXME This may be done in major/minor mode setup
-  (setq syntax-ppss-table javaimp-syntax-table)
-  (setq-local multibyte-syntax-as-symbol t)
-  (add-hook 'after-change-functions #'javaimp-parse--update-dirty-pos))
+(defun javaimp-parse--update-dirty-pos (beg _end _old-len)
+  "Function to add to `after-change-functions' hook."
+  (when (and javaimp-parse--dirty-pos
+             (or (not (marker-position javaimp-parse--dirty-pos))
+                 (< beg javaimp-parse--dirty-pos)))
+    (set-marker javaimp-parse--dirty-pos beg)))
+
 
 (defun javaimp-parse--enclosing-scope (&optional pred)
   "Return innermost enclosing scope matching PRED."
-  (with-syntax-table javaimp-syntax-table
+  (javaimp-parse--skip-back-until)
+  (catch 'found
     (let ((state (syntax-ppss)))
-      ;; Move out of any comment/string
-      (when (nth 8 state)
-	(goto-char (nth 8 state))
-	(setq state (syntax-ppss)))
-      (catch 'found
-        (while t
-          (let ((res (save-excursion
-                       (javaimp-parse--scopes nil))))
-            (when (and (javaimp-scope-p res)
-                       (or (null pred)
-                           (funcall pred res)))
-              (throw 'found res))
-            ;; Go up until we get something
-            (if (nth 1 state)
-                (progn
-                  (goto-char (nth 1 state))
-                  (setq state (syntax-ppss)))
-              (throw 'found nil))))))))
+      (while t
+        (let ((res (save-excursion
+                     (javaimp-parse--scopes nil))))
+          (when (and (javaimp-scope-p res)
+                     (or (null pred)
+                         (funcall pred res)))
+            (throw 'found res))
+          ;; Go up until we get something
+          (if (nth 1 state)
+              (progn
+                (goto-char (nth 1 state))
+                (setq state (syntax-ppss)))
+            (throw 'found nil)))))))
 
 (defun javaimp-parse--class-abstract-methods ()
   (goto-char (point-max))
@@ -636,13 +625,6 @@ point nowhere when done."
           ;; we've entered another nest, go back to its start
           (goto-char (nth 1 (syntax-ppss))))))
     res))
-
-(defun javaimp-parse--update-dirty-pos (beg _end _old-len)
-  "Function to add to `after-change-functions' hook."
-  (when (and javaimp-parse--dirty-pos
-             (or (not (marker-position javaimp-parse--dirty-pos))
-                 (< beg javaimp-parse--dirty-pos)))
-    (set-marker javaimp-parse--dirty-pos beg)))
 
 
 ;; Functions intended to be called from other parts of javaimp.  They
