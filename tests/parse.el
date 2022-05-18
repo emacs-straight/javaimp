@@ -103,6 +103,9 @@ Exception4<? super Exception5>>")
                   ;; don't go into incomplete generic
                   ("S> T " . 4)
 
+                  ;; array
+                  ("String[] " . 1)
+
                   ;; don't go over semicolon
                   ("foo(); void " . 8)))
     (javaimp-with-temp-buffer nil
@@ -119,104 +122,106 @@ Exception4<? super Exception5>>")
   (dolist (item test-items)
     (javaimp-with-temp-buffer nil
       (insert (nth 0 item))
-      (let* ((javaimp-parse--scope-hook
-              (lambda (arg)
-                (save-excursion
-                  (funcall parser arg))))
-             (scopes (javaimp-parse-get-all-scopes)))
-        (should (= 1 (length scopes)))
-        (should (eq (javaimp-scope-type (car scopes)) (nth 1 item)))
-        (should (equal (javaimp-scope-name (car scopes)) (nth 2 item)))))))
-
+      (let* ((javaimp-parse--scope-hook (javaimp-parse--wrap-parser parser))
+             (scopes (mapcar #'javaimp-test-parse--simplify-scope
+                             (javaimp-parse-get-all-scopes nil nil nil t))))
+        (should (equal (cdr item) scopes))))))
 
 (ert-deftest javaimp-parse-scope-class ()
   (javaimp-test-parse--scope #'javaimp-parse--scope-class
     '("class Foo {"
-      class "Foo")
+      ((class "Foo")))
     '("class Foo extends Bar {"
-      class "Foo")
-    '("class Foo implements Bar {"
-      class "Foo")
-    '("class Foo implements Bar, Baz {"
-      class "Foo")
+      ((class "Foo")))
     '("public class Foo extends Bar implements Baz1 , Baz2 {"
-      class "Foo")
+      ((class "Foo")))
     `(,(subst-char-in-string
         ?  ?\n
         "public class Foo extends Bar implements Baz1 , Baz2 {")
-      class "Foo")
+      ((class "Foo")))
     '("class Foo<Bar, Baz> extends FooSuper<Bar, Baz> \
 implements Interface1<Bar, Baz>, Interface2 {"
-      class "Foo")
+      ((class "Foo")))
     '("class Foo<E extends Bar> {"
-      class "Foo")
+      ((class "Foo")))
+    ;; enum is also a keyword
     '("class Foo<Enum<?>> {"
-      class "Foo")
+      ((class "Foo")))
     '("class Foo<T extends Baz<? extends Baz2>> \
 extends Bar<? extends Baz<? extends Baz2>> {"
-      class "Foo")
+      ((class "Foo")))
     '("interface Foo<Bar, Baz> {"
-      interface "Foo")
+      ((interface "Foo")))
     '("private enum Foo {"
-      enum "Foo")
+      ((enum "Foo")))
     ))
 
 (ert-deftest javaimp-parse-scope-anon-class ()
   (javaimp-test-parse--scope #'javaimp-parse--scope-anon-class
     '(" = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {"
-      anon-class "<anon>Object")
+      ((anon-class "<anon>Object")))
     `(,(subst-char-in-string
         ?  ?\n
         " = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {")
-      anon-class "<anon>Object")
-    '(" = (obj.getField()).new Object<Class1, Class2>(1, baz) {"
-      anon-class "<anon>Object")
+      ((anon-class "<anon>Object")))
+    '(" = (obj.getField()) .new Object<Class1, Class2>(1, baz) {"
+      ((anon-class "<anon>Object")))
     '(" = obj.new Object<>(1, baz) {"
-      anon-class "<anon>Object")
+      ((anon-class "<anon>Object")))
     ))
 
 (ert-deftest javaimp-parse-scope-method-or-stmt ()
   (javaimp-test-parse--scope #'javaimp-parse--scope-method-or-stmt
     '("static void foo_bar ( String a , int b ) {"
-      method "foo_bar(String,int)")
+      ((method "foo_bar(String,int)")))
     `(,(subst-char-in-string
         ?  ?\n
         "static void foo_bar ( String a , int b ) {")
-      method "foo_bar(String,int)")
+      ((method "foo_bar(String,int)")))
     '("void foo_bar(String a, int b) throws E1, E2 {"
-      method "foo_bar(String,int)")
+      ((method "foo_bar(String,int)")))
     '("void foo_bar()
 throws E1 {"
-      method "foo_bar()")
+      ((method "foo_bar()")))
     '("if (foo_bar(a, b) < 2) {"
-      statement "if")
+      ((statement "if")))
     ))
 
 (ert-deftest javaimp-parse-scope-simple-stmt ()
   (javaimp-test-parse--scope #'javaimp-parse--scope-simple-stmt
     '(" try {"
-      simple-statement "try")
+      ((simple-statement "try")))
     `(,(subst-char-in-string ?  ?\n " try {")
-      simple-statement "try")
-    ;; static initializer
+      ((simple-statement "try")))
     '("static {"
-      simple-statement "static")
-    ;; lambda
+      ((simple-statement "static")))
     '("it -> {"
-      simple-statement "lambda")
+      ((simple-statement "lambda")))
     '("(x, y) -> {"
-      simple-statement "lambda")
+      ((simple-statement "lambda")))
     ))
 
-(ert-deftest javaimp-parse-scope-array ()
-  (javaimp-test-parse--scope #'javaimp-parse--scope-array
+(ert-deftest javaimp-parse-scope-array-init ()
+  (javaimp-test-parse--scope #'javaimp-parse--scope-array-init
     '("new String[] {"
-      array "")
-    ;; TODO fix
-    ;; '("new Object[][] { {"
-    ;;   array "")
-    ;; '("new int[] {{1, 2}, {"
-    ;;   array "")
+      ((array-init "")))
+    '("new Object[i][] { {"
+      ((array-init ""))
+      ((array-init nil) (array-init "")))
+    '("new int[] {{1, 2}, {"
+      ((array-init ""))
+      ((array-init nil) (array-init ""))
+      ((array-init nil) (array-init "")))
+    '("new int[] {{{1,"
+      ((array-init ""))
+      ((array-init nil) (array-init ""))
+      ((array-init nil) (array-init nil) (array-init "")))
+    `(,(subst-char-in-string ?  ?\n "new int[] {{1, 2}, {")
+      ((array-init ""))
+      ((array-init nil) (array-init ""))
+      ((array-init nil) (array-init "")))
+    '("@FooContainer( {"
+      ((array-init "")))
     ))
 
 
@@ -225,13 +230,7 @@ throws E1 {"
 
 (defun javaimp-test-parse--get-all-scopes-defuns ()
   (let* ((scopes (javaimp-parse-get-all-scopes
-                  nil nil
-                  (lambda (s)
-                    (memq (javaimp-scope-type s)
-                          '(class interface enum method)))
-                  (lambda (s)
-                    (memq (javaimp-scope-type s)
-                          '(class interface enum method)))))
+                  nil nil (javaimp-scope-defun-p t)))
          (actual (mapcar #'javaimp-test-parse--simplify-scope scopes))
          (expected
           '(((class "Top"))
@@ -240,33 +239,36 @@ throws E1 {"
 
             ((method "foo()") (class "CInner1") (class "Top"))
 
-            ((class "CInner1_CLocal1")
+            ((local-class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (class "CInner1_CLocal1")
+             (local-class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
-            ((class "CInner1_CLocal1_CLocal1")
+            ((local-class "CInner1_CLocal1_CLocal1")
              (method "foo()")
-             (class "CInner1_CLocal1")
+             (local-class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (class "CInner1_CLocal1_CLocal1")
+             (local-class "CInner1_CLocal1_CLocal1")
              (method "foo()")
-             (class "CInner1_CLocal1")
+             (local-class "CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
-            ((class "CInner1_CLocal2")
+            ((local-class "CInner1_CLocal2")
              (method "foo()") (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (class "CInner1_CLocal2")
+             (local-class "CInner1_CLocal2")
              (method "foo()") (class "CInner1") (class "Top"))
+
+            ((anon-class "<anon>Object")
+             (class "CInner1") (class "Top"))
 
             ((method "toString()")
-             (class "CInner1") (class "Top"))
+             (anon-class "<anon>Object") (class "CInner1") (class "Top"))
 
             ((class "CInner1_CInner1") (class "CInner1") (class "Top"))
 
@@ -309,17 +311,18 @@ throws E1 {"
     (should (= (length expected) (length actual)))
     (dotimes (i (length expected))
       (should (equal (nth i expected) (nth i actual))))
-    ;; selectively check positions
+    ;; Selectively check positions
     (let ((data
            `((,(nth 0 scopes) "Top" 26 36)
-             (,(nth 16 scopes) "foo()" 1798 1804)
-             (,(nth 23 scopes) "EnumInner1_EInner1" 2462 2486)
-             (,(nth 25 scopes) "foo()" 2554 2560))))
+             (,(nth 17 scopes) "foo()" 1798 1804)
+             (,(nth 24 scopes) "EnumInner1_EInner1" 2462 2486)
+             (,(nth 26 scopes) "foo()" 2554 2560))))
       (dolist (elt data)
         (let ((scope (nth 0 elt)))
           (should (equal (nth 1 elt) (javaimp-scope-name scope)))
           (should (equal (nth 2 elt) (javaimp-scope-start scope)))
           (should (equal (nth 3 elt) (javaimp-scope-open-brace scope))))))))
+
 
 (defun javaimp-test-parse--simplify-scope (s)
   (let (res)
@@ -380,6 +383,7 @@ import static some_class.fun_2; // comment
     ;; don't reparse
     (javaimp-test-parse--get-all-scopes-defuns)))
 
+
 (ert-deftest javaimp-parse-get-enclosing-scope ()
   (let ((testcases
          '(;; bob
@@ -416,9 +420,4 @@ import static some_class.fun_2; // comment
          (equal (cdr testcase)
                 (javaimp-test-parse--simplify-scope
                  (javaimp-parse-get-enclosing-scope
-                  (lambda (s)
-                    (memq (javaimp-scope-type s)
-                          '(class interface enum method)))
-                  (lambda (s)
-                    (memq (javaimp-scope-type s)
-                          '(class interface enum method)))))))))))
+                  (javaimp-scope-defun-p 'method)))))))))

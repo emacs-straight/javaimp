@@ -13,14 +13,13 @@
   (dolist (elt alist)
     (if (and (= (length elt) 4)
              (functionp (nth 2 elt)))
-        (setcdr elt (nth 1 elt))
+        (setcdr elt nil)
       (javaimp-test-imenu--simplify-entries (cdr elt)))))
 
 
 (ert-deftest javaimp-imenu-create-index ()
   (let ((actual (javaimp-with-temp-buffer "test1.java"
-                  (let ((imenu-use-markers nil))
-                    (javaimp-imenu-create-index))))
+                  (javaimp-imenu-create-index)))
         (expected-names
          '("foo() [Top.CInner1]"
            "foo() [Top.CInner1.CInner1_CInner1]"
@@ -45,36 +44,35 @@
 
 (ert-deftest javaimp-imenu-create-index-use-sub-alists ()
   (let ((actual (javaimp-with-temp-buffer "test1.java"
-                  (let ((imenu-use-markers nil)
-                        (javaimp-imenu-use-sub-alists t))
+                  (let ((javaimp-imenu-use-sub-alists t))
                     (javaimp-imenu-create-index))))
         (expected
          '(("Top"
             ("CInner1"
-             ("foo()" . 98)
+             ("foo()")
              ("CInner1_CInner1"
-              ("foo()" . 1099)
-              ("abstract_method()" . 1148)
-              ("bar()" . 1192)
-              ("baz()" . 1281)))
+              ("foo()")
+              ("abstract_method()")
+              ("bar()")
+              ("baz()")))
             ("IInner1"
-             ("foo()" . 1603)
-             ("abstract_method()" . 1715)
+             ("foo()")
+             ("abstract_method()")
              ("IInner1_CInner1"
-              ("foo()" . 1798))
-             ("baz()" . 1934)
-             ("defaultMethod(String)" . 1963)
+              ("foo()"))
+             ("baz()")
+             ("defaultMethod(String)")
              ("IInner1_IInner1"
-              ("foo()" . 2122)
-              ("defaultMethod(String)" . 2157)
-              ("baz()" . 2258)))
+              ("foo()")
+              ("defaultMethod(String)")
+              ("baz()")))
             ("EnumInner1"
-             ("EnumInner1()" . 2353)
-             ("foo()" . 2399)
+             ("EnumInner1()")
+             ("foo()")
              ;; "EnumInner1_EInner1" omitted because no methods inside
              ))
            ("ColocatedTop"
-            ("foo()" . 2554)
-            ("bar(String,String)" . 2578)))))
+            ("foo()")
+            ("bar(String,String)")))))
     (javaimp-test-imenu--simplify-entries actual)
     (should (equal expected actual))))

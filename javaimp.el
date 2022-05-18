@@ -238,15 +238,6 @@ https://docs.gradle.org/current/userguide/java_library_plugin.html\
 #sec:java_library_classes_usage
 ")
 
-(defconst javaimp-show-scopes-type-abbrevs
-  '((anon-class . "ac")
-    (statement . "st")
-    (simple-statement . "ss")
-    (array . "ar")
-    (method . "me")
-    (class . "cl")
-    (interface . "in")
-    (enum . "en")))
 
 
 ;; Subroutines
@@ -805,9 +796,9 @@ in a major mode hook."
         (javaimp-tree-map-nodes
          (lambda (scope)
            (if (eq (javaimp-scope-type scope) 'method)
-               ;; entry
+               ;; leaf entry for method
                (cons nil (javaimp-imenu--make-entry scope))
-             ;; sub-alist
+             ;; sub-alist for class-like
              (cons t (javaimp-scope-name scope))))
          (lambda (res)
            (or (functionp (nth 2 res))  ; imenu entry
@@ -825,8 +816,8 @@ in a major mode hook."
                 (setf (alist-get (car entry) alist 0 nil #'equal)
                       (1+ (alist-get (car entry) alist 0 nil #'equal))))
               entries)
+        ;; Append parents to equal names to disambiguate them
         (mapc (lambda (entry)
-                ;; disambiguate same method names
                 (when (> (alist-get (car entry) alist 0 nil #'equal) 1)
                   (setcar entry
                           (format "%s [%s]"
@@ -836,27 +827,29 @@ in a major mode hook."
               entries)))))
 
 (defun javaimp-imenu--get-forest ()
-  (let* ((defun-scopes
-          (javaimp-parse-get-all-scopes
-           nil nil (javaimp-scope-defun-p '(method))))
-         (methods (seq-filter
-                   (lambda (scope)
-                     (eq (javaimp-scope-type scope) 'method))
-                   defun-scopes))
-         (classes (seq-filter
-                   (lambda (scope)
-                     (not (eq (javaimp-scope-type scope) 'method)))
-                   defun-scopes))
-         (top-classes (seq-filter (lambda (s)
-                                    (null (javaimp-scope-parent s)))
-                                  classes))
+  "Subroutine of `javaimp-imenu-create-index'."
+  (let* ((scopes
+          (javaimp-parse-get-all-scopes nil nil
+                                        (javaimp-scope-defun-p 'method)))
          (abstract-methods (append
                             (javaimp-parse-get-class-abstract-methods)
-                            (javaimp-parse-get-interface-abstract-methods))))
+                            (javaimp-parse-get-interface-abstract-methods)))
+
+         methods classes top-classes)
+    (dolist (s scopes)
+      (if (eq (javaimp-scope-type s) 'method)
+          (push s methods)
+        (push s classes)
+        (when (null (javaimp-scope-parent s))
+          (push s top-classes))))
+    (setq methods (nreverse methods)
+          classes (nreverse classes)
+          top-classes (nreverse top-classes))
     (mapcar
      (lambda (top-class)
        (when javaimp-verbose
-         (message "Building tree for top-level class-like scope: %s"
+         (message "Building tree for top-level %s %s"
+                  (javaimp-scope-type top-class)
                   (javaimp-scope-name top-class)))
        (javaimp-tree-build top-class
                            (append methods
@@ -884,7 +877,7 @@ in a major mode hook."
 (defun javaimp-xref--backend () 'javaimp)
 
 (defun javaimp-xref--ident-completion-table ()
-  (let ((scope-pred (javaimp-scope-defun-p '(method)))
+  (let ((scope-pred (javaimp-scope-defun-p 'method))
         (module (javaimp--detect-module)))
     (if module
         (nconc
@@ -995,7 +988,7 @@ buffer."
              (save-restriction
                (widen)
                (javaimp-parse-get-all-scopes
-                nil nil (javaimp-scope-defun-p '(method anon-class)))))))
+                nil nil (javaimp-scope-defun-p t))))))
         (default-dir
          (with-current-buffer source-buf
            default-directory))
@@ -1024,8 +1017,8 @@ buffer."
                              (with-current-buffer source-buf
                                (line-number-at-pos (javaimp-scope-start scope)))
                              depth
-                             (cdr (assq (javaimp-scope-type scope)
-                                        javaimp-show-scopes-type-abbrevs))
+                             (substring (symbol-name (javaimp-scope-type scope))
+                                        0 2)
                              (make-string (* 2 depth) ? )
                              (javaimp-scope-name scope))
                      'mouse-face 'highlight
@@ -1126,7 +1119,7 @@ PREV-INDEX gives the index of the method itself."
     (save-restriction
       (widen)
       (let* ((pos (point))
-             (defun-pred (javaimp-scope-defun-p '(method anon-class)))
+             (defun-pred (javaimp-scope-defun-p t))
              (enc (javaimp-parse-get-enclosing-scope defun-pred))
              (parent
               (if (and enc (eq (javaimp-scope-type enc) 'method))
@@ -1196,7 +1189,7 @@ PREV-INDEX gives the index of the method itself."
     (save-restriction
       (widen)
       (let ((s (javaimp-parse-get-enclosing-scope
-                (javaimp-scope-defun-p '(method anon-class))))
+                (javaimp-scope-defun-p 'method)))
             names)
         (while s
           (push (javaimp-scope-name s) names)
