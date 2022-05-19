@@ -36,7 +36,7 @@
 
 
 (defconst javaimp-scope-all-types
- '(anon-class
+  '(anon-class
     array-init
     class
     enum
@@ -702,14 +702,12 @@ either of symbols `normal' or 'static'."
           class-alist)))
 
 (defun javaimp-parse-get-all-scopes (&optional beg end pred no-filter)
-  "Return all scopes in the current buffer between positions BEG
-and END, both exclusive, optionally filtering them with PRED.
-PRED should not move point.  Note that parents may be outside of
-region given by BEG and END.  BEG is the LIMIT argument to
-`previous-single-property-change', and so may be nil.  END
-defaults to end of accessible portion of the buffer.
-
-The returned objects are copies, and so may be freely modified.
+  "Return copies of all scopes in the current buffer between
+positions BEG and END, both exclusive, optionally filtering them
+with PRED.  PRED should not move point.  Note that parents may be
+outside of region given by BEG and END.  BEG is the LIMIT
+argument to `previous-single-property-change', and so may be nil.
+END defaults to end of accessible portion of the buffer.
 
 Scope parents are filtered according to
 `javaimp-parse--scope-type-defun-p', but if NO-FILTER is non-nil
@@ -733,21 +731,21 @@ then no filtering is done."
         (push scope res)))
     res))
 
-(defun javaimp-parse-get-enclosing-scope (&optional pred)
-  "Return innermost enclosing scope at point.  If PRED is non-nil
-then the scope must satisfy it, otherwise the next outer scope is
-tried.
-
-The returned objects are copies, and so may be freely modified.
+(defun javaimp-parse-get-enclosing-scope (&optional pred no-filter)
+  "Return copy of innermost enclosing scope at point.  If PRED is
+non-nil then the scope must satisfy it, otherwise the next outer
+scope is tried.
 
 Scope parents are filtered according to
-`javaimp-parse--scope-type-defun-p'."
+`javaimp-parse--scope-type-defun-p', but if NO-FILTER is non-nil
+then no filtering is done."
   (save-excursion
     (javaimp-parse--all-scopes))
   (when-let ((scope (javaimp-parse--enclosing-scope pred)))
     (setq scope (javaimp-scope-copy scope))
-    (javaimp-scope-filter-parents
-     #'javaimp-parse--scope-type-defun-p scope)
+    (unless no-filter
+      (javaimp-scope-filter-parents
+       #'javaimp-parse--scope-type-defun-p scope))
     scope))
 
 (defun javaimp-parse-get-defun-decl-start (&optional bound)

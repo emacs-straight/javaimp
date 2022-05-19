@@ -1071,8 +1071,10 @@ buffer."
               (< target-idx 0)
               (>= target-idx (length siblings)))
           (if parent-start
-              ;; Move up to parent, trying to also skip its decl
-              ;; prefix
+              ;; It's not very clear what to do when we need to move
+              ;; out of current scope.  Currently we just move up to
+              ;; parent, trying to also skip its decl prefix.  This
+              ;; gives acceptable results.
               (goto-char (or (javaimp--beg-of-defun-decl parent-start)
                              parent-start))
             (goto-char (if (> arg 0)
@@ -1182,6 +1184,25 @@ PREV-INDEX gives the index of the method itself."
               -1))
          siblings)))))
 
+(defun javaimp-jump-to-enclosing-scope ()
+  "Jump to enclosing scope at point."
+  (interactive)
+  (if-let ((scope (save-excursion
+                    (save-restriction
+                      (widen)
+                      (javaimp-parse-get-enclosing-scope #'always t)))))
+      (progn
+        (goto-char (or (and (javaimp-scope-type scope)
+                            (not (memq (javaimp-scope-type scope)
+                                       '(array-init simple-statement statement)))
+                            (javaimp--beg-of-defun-decl
+                             (javaimp-scope-start scope)))
+                       (javaimp-scope-start scope)))
+        (message "%s %s at position %d"
+                 (javaimp-scope-type scope) (javaimp-scope-name scope)
+                 (javaimp-scope-start scope)))
+    (user-error "There is no enclosing scope at point")))
+
 
 (defun javaimp-add-log-current-defun ()
   "Function to be used as `add-log-current-defun-function'."
@@ -1208,6 +1229,7 @@ PREV-INDEX gives the index of the method itself."
 ;; Main
 
 (defvar-keymap javaimp-basic-map
+  "e" #'javaimp-jump-to-enclosing-scope
   "i" #'javaimp-add-import
   "o" #'javaimp-organize-imports
   "s" #'javaimp-show-scopes)
