@@ -164,6 +164,8 @@ extends Bar<? extends Baz<? extends Baz2>> {"
         ?  ?\n
         " = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {")
       ((anon-class "<anon>Object")))
+    '("new Object(foo()) {"
+      ((anon-class "<anon>Object")))
     '(" = (obj.getField()) .new Object<Class1, Class2>(1, baz) {"
       ((anon-class "<anon>Object")))
     '(" = obj.new Object<>(1, baz) {"

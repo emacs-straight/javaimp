@@ -29,8 +29,9 @@
 ;;
 ;; In addition, this package provides `javaimp-minor-mode' which
 ;; enables decent Imenu support (with nesting and abstract methods in
-;; interfaces and abstract classes), xref support (though with default
-;; xref-find-references) and some navigation functions.
+;; interfaces and abstract classes), xref support (finding definition
+;; is implemented; finding references is left at default) and some
+;; navigation functions, like beginning-of-defun.
 ;;
 ;;   Quick start
 ;;

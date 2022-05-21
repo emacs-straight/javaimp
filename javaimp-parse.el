@@ -228,18 +228,23 @@ function is to just skip whitespace / comments."
                  (setq last-what 'char
                        last-pos (point)))))))))
 
-(defun javaimp-parse--preceding (regexp scope-start &optional bound skip-count)
+(defun javaimp-parse--preceding (regexp open-brace &optional bound skip-count)
   "Returns non-nil if a match for REGEXP is found before point,
 but not before BOUND.  Matches inside comments / strings are
-skipped.  Potential match is checked to be SKIP-COUNT lists away
-from the SCOPE-START (1 is for scope start itself, so if you want
-to skip one additional list, use 2 etc.).  If a match is found,
-then match-data is set, as for `re-search-backward'."
+skipped.  A match is checked to be SKIP-COUNT lists away from the
+OPEN-BRACE.  If a suitable match is found, then the match-data is
+set, as for `re-search-backward'."
   (and (javaimp-parse--rsb-keyword regexp bound t)
        (ignore-errors
-         ;; Does our match belong to the right block?
-         (= (scan-lists (match-end 0) (or skip-count 1) -1)
-            (1+ scope-start)))))
+         ;; Check if our match belongs to the right block
+         (let ((pos (match-end 0)))
+           ;; Skip over complete lists
+           (when skip-count
+             (setq pos (scan-lists pos skip-count 0)))
+           ;; Now go past open-brace
+           (and pos
+                (= (scan-lists pos 1 -1)
+                   (1+ open-brace)))))))
 
 (defun javaimp-parse--decl-suffix (regexp brace-pos &optional bound)
   "Attempts to parse declaration suffix backwards from point (but
@@ -296,8 +301,9 @@ point is also at that position) or nil."
                              '(?@ ?\(   ;annotation type / args
                                   ?<    ;generic type
                                   ?\[)) ;array
-                      ;; keyword / identifier first char
-                      (= (syntax-class (syntax-after pos)) 2))) ;word
+                      ;; keyword / identifier first char: word or
+                      ;; symbol
+                      (memql (syntax-class (syntax-after pos)) '(2 3))))
         (goto-char (setq res pos))))
     res))
 
@@ -389,13 +395,14 @@ type definitions.  If INCLUDE-ALSO is 'method' then also include
 brace.")
 
 (defun javaimp-parse--scope-class (brace-pos)
-  "Attempts to parse class scope."
+  "Attempts to parse class-like scope."
   (when (javaimp-parse--preceding
          javaimp-parse--class-keywords-regexp
          brace-pos
-         ;; closest preceding closing paren is a good bound
-         ;; because there _will be_ such char in frequent case
-         ;; of method/stmt
+         ;; Nearest preceding closing paren is a good bound because
+         ;; there _will be_ such char in frequent case of
+         ;; method/statement/anon-class, and we stop checks here
+         ;; sooner than later.
          (save-excursion
            (when (javaimp-parse--rsb-keyword ")" nil t 1)
              (1+ (point)))))
@@ -403,11 +410,13 @@ brace.")
            (keyword-end (match-end 1))
            arglist)
       (goto-char brace-pos)
+      ;; "extends" comes before "implements" etc., thus try in this
+      ;; order
       (or (javaimp-parse--decl-suffix "\\_<extends\\_>" brace-pos keyword-end)
           (javaimp-parse--decl-suffix "\\_<implements\\_>" brace-pos keyword-end)
           (javaimp-parse--decl-suffix "\\_<permits\\_>" brace-pos keyword-end))
-      ;; we either skipped back over the valid declaration
-      ;; suffix(-es), or there wasn't any
+      ;; We either skipped back over the valid declaration suffixes,
+      ;; or there weren't any of them.
       (setq arglist (javaimp-parse--arglist keyword-end (point) t))
       (when (= (length arglist) 1)
         (make-javaimp-scope :type (intern
@@ -436,22 +445,22 @@ lambdas are also recognized as such."
   "Attempts to parse anonymous class scope."
   ;; skip arg-list and ws
   (when (and (progn
-                 (javaimp-parse--skip-back-until)
-                 (= (char-before) ?\)))
-               (ignore-errors
-                 (goto-char
-                  (scan-lists (point) -1 0))))
-      (let ((end (point))
-            start arglist)
-        (when (javaimp-parse--preceding "\\_<new\\_>" brace-pos nil 2)
-          (setq start (match-beginning 0)
-                arglist (javaimp-parse--arglist (match-end 0) end t))
-          (when (= (length arglist) 1)
-            (make-javaimp-scope :type 'anon-class
-                                :name
-                                (concat "<anon>"
-                                        (javaimp-parse--substr-before-< (caar arglist)))
-                                :start start))))))
+               (javaimp-parse--skip-back-until)
+               (= (char-before) ?\)))
+             (ignore-errors
+               (goto-char
+                (scan-lists (point) -1 0))))
+    (let ((end (point))
+          start arglist)
+      (when (javaimp-parse--preceding "\\_<new\\_>" brace-pos nil 1)
+        (setq start (match-beginning 0)
+              arglist (javaimp-parse--arglist (match-end 0) end t))
+        (when (= (length arglist) 1)
+          (make-javaimp-scope :type 'anon-class
+                              :name
+                              (concat "<anon>"
+                                      (javaimp-parse--substr-before-< (caar arglist)))
+                              :start start))))))
 
 (defun javaimp-parse--scope-method-or-stmt (brace-pos)
   "Attempts to parse 'method' or 'statement' scope."
