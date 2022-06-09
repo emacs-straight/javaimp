@@ -189,8 +189,8 @@ skipping further backwards is done by the caller."
 or reaching bob.
 
 STOP-P is invoked with two arguments which describe the last
-non-ws thing skipped: LAST-WHAT (symbol - either 'list' or
-'char') and LAST-POS.  If STOP-P returns non-nil, then the return
+non-ws thing skipped: LAST-WHAT (symbol - either `list' or
+`char') and LAST-POS.  If STOP-P returns non-nil, then the return
 value is also non-nil: either (LAST-WHAT . LAST-POS) if both are
 non-nil or t.  Otherwise the return value is nil.
 
@@ -278,12 +278,10 @@ point (but not farther than BOUND).  Matches inside comments /
 strings are skipped.  Return the beginning of the match (then the
 point is also at that position) or nil."
   (javaimp-parse--skip-back-until)
-  ;; If we skip a previous scope (including unnamed initializers), or
-  ;; reach enclosing scope start, we'll fail the check in the below
-  ;; loop.  But a semicolon, which delimits statements, will just be
-  ;; skipped by scan-sexps, so find it and use as bound.  If it is in
-  ;; another scope, that's not a problem, for the same reasons as
-  ;; described above.
+  ;; A semicolon, which delimits statements, will just be skipped by
+  ;; scan-sexps, so find it and use as bound.  If it is in another
+  ;; scope, that's not a problem: we'll attempt to skip that scope,
+  ;; and exit the loop anyway.
   (let* ((prev-semi (save-excursion
                       (javaimp-parse--rsb-keyword ";" bound t)))
          (bound (when (or bound prev-semi)
@@ -346,9 +344,9 @@ left."
 
 (defun javaimp-scope-defun-p (&optional include-also)
   "Return predicate which matches defun scopes, which are usually
-type definitions.  If INCLUDE-ALSO is 'method' then also include
- methods.  If INCLUDE-ALSO is t, include methods, as well as
- local / anonymous classes and their methods."
+type definitions.  If INCLUDE-ALSO is `method' then also include
+methods.  If INCLUDE-ALSO is t, include methods, as well as local
+/ anonymous classes and their methods."
   (let ((leaf-types
          (append '(class interface enum)
                  (when include-also
@@ -426,7 +424,7 @@ brace.")
                             :start keyword-start)))))
 
 (defun javaimp-parse--scope-simple-stmt (_brace-pos)
-  "Attempts to parse 'simple-statement' scope.  Currently block
+  "Attempts to parse `simple-statement' scope.  Currently block
 lambdas are also recognized as such."
   (javaimp-parse--skip-back-until)
   (cond ((looking-back "->" (- (point) 2))
@@ -463,7 +461,7 @@ lambdas are also recognized as such."
                               :start start))))))
 
 (defun javaimp-parse--scope-method-or-stmt (brace-pos)
-  "Attempts to parse 'method' or 'statement' scope."
+  "Attempts to parse `method' or `statement' scope."
   (let (;; take the closest preceding closing paren as the bound
         (throws-search-bound (save-excursion
                                (when (javaimp-parse--rsb-keyword ")" nil t 1)
@@ -507,7 +505,7 @@ lambdas are also recognized as such."
                :start (point)))))))))
 
 (defun javaimp-parse--scope-array-init (_brace-pos)
-  "Attempts to parse 'array-init' scope."
+  "Attempts to parse `array-init' scope."
   (javaimp-parse--skip-back-until)
   (let (decl-prefix-beg)
     (when (or
@@ -527,7 +525,7 @@ lambdas are also recognized as such."
 Returns most nested one, with its parents sets accordingly.  If
 COUNT is nil then goes all the way up.
 
-Examines and sets property 'javaimp-parse-scope' at each scope's
+Examines and sets property `javaimp-parse-scope' at each scope's
 open brace.  If neither of functions in
 `javaimp-parse--scope-hook' return non-nil then a dummy scope is
 created, with `javaimp-scope-type' set to nil.
@@ -695,7 +693,7 @@ at the end of directive."
 . CLASS-ALIST).  REGION, a cons of two positions, spans from bol
 of first import to eol of last import.  CLASS-ALIST contains
 elements (CLASS . TYPE), where CLASS is a string and TYPE is
-either of symbols `normal' or 'static'."
+either of symbols `normal' or `static'."
   (javaimp-parse--all-scopes)
   (goto-char (point-max))
   (let (start-pos end-pos class-alist)

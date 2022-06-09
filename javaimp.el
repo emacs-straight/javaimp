@@ -1239,7 +1239,8 @@ PREV-INDEX gives the index of the method itself."
   "C-c j" javaimp-basic-map
   ;; Override functions from java-mode
   "C-M-a" #'beginning-of-defun
-  "C-M-e" #'end-of-defun)
+  "C-M-e" #'end-of-defun
+  "C-M-h" #'mark-defun)
 
 
 ;;;###autoload
