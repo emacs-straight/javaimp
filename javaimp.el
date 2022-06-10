@@ -387,7 +387,7 @@ Finally, already parsed buffers are processed in
             parsed-bufs)))))))
 
 (defun javaimp--get-current-source-dir ()
-  "Try to determine current root source directory from 'package'
+  "Try to determine current root source directory from \"package\"
 directive in the current buffer.  If there's no such directive,
 then just return `default-directory'."
   (if-let ((package (save-excursion
@@ -673,9 +673,9 @@ its jar dependencies, as well as its source dependencies.
   (javaimp-organize-imports (list (cons classname 'normal))))
 
 (defun javaimp--get-jdk-classes (java-home)
-  "If 'jmods' subdirectory exists in JAVA-HOME (Java 9+), read all
-.jmod files in it.  Else, if 'jre/lib' subdirectory exists in
-JAVA-HOME (earlier Java versions), read all .jar files in it."
+  "If \"jmods\" subdirectory exists in JAVA-HOME (Java 9+), read
+all .jmod files in it.  Else, if \"jre/lib\" subdirectory exists
+in JAVA-HOME (earlier Java versions), read all .jar files in it."
   (let ((dir (file-name-concat java-home "jmods")))
     (if (file-directory-p dir)
         (javaimp--collect-from-files

@@ -55,9 +55,9 @@ information."
 (defun javaimp-gradle--handler ()
   "Parse current buffer into list of project descriptors, each of
 which is an alist of attributes (NAME . VALUE).  Each attribute
-occupies one line, and is of the form 'NAME=VALUE'.  See file
-'gradleTaskBody.inc.kts' for the script which generates such
-output.  Attribute 'id' signifies the start of another
+occupies one line, and is of the form \"NAME=VALUE\".  See file
+gradleTaskBody.inc.kts for the script which generates such
+output.  Attribute \"id\" signifies the start of another
 descriptor."
   (goto-char (point-min))
   (let (alist res sym val)
