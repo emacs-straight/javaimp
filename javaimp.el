@@ -802,17 +802,18 @@ in a major mode hook."
              ;; sub-alist for class-like
              (cons t (javaimp-scope-name scope))))
          (lambda (res)
-           (or (functionp (nth 2 res))  ; imenu entry
+           (or (functionp (nth 2 res))  ; leaf imenu entry
                (cdr res)))              ; non-empty sub-alist
          forest)
-      (let ((entries
-             (mapcar #'javaimp-imenu--make-entry
-                     (seq-sort-by #'javaimp-scope-start #'<
-                                  (javaimp-tree-collect-nodes
-                                   (lambda (scope)
-                                     (eq (javaimp-scope-type scope) 'method))
-                                   forest))))
-            alist)
+      ;; Flat list - currently only methods
+      (let* ((methods (javaimp-tree-collect-nodes
+                       (lambda (scope)
+                         (eq (javaimp-scope-type scope) 'method))
+                       forest))
+             (entries
+              (mapcar #'javaimp-imenu--make-entry
+                      (seq-sort-by #'javaimp-scope-start #'< methods)))
+             alist)
         (mapc (lambda (entry)
                 (setf (alist-get (car entry) alist 0 nil #'equal)
                       (1+ (alist-get (car entry) alist 0 nil #'equal))))

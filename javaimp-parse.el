@@ -308,25 +308,34 @@ point is also at that position) or nil."
 
 ;;; Scopes
 
-(defun javaimp-scope-copy (scope)
-  "Recursively copies SCOPE and its parents."
-  (let* ((res (copy-javaimp-scope scope))
-         (tmp res)
-         orig-parent)
-    (while (setq orig-parent (javaimp-scope-parent tmp))
-      (setf (javaimp-scope-parent tmp) (copy-javaimp-scope orig-parent))
-      (setq tmp (javaimp-scope-parent tmp)))
-    res))
+(defun javaimp-scope-copy (scope &optional parent-pred scope-alist)
+  "Return a recursive copy of SCOPE and its parents.  If a parent
+matches PARENT-PRED (or PARENT-PRED is nil) then it's copied,
+otherwise it's excluded from the chain.
 
-(defun javaimp-scope-filter-parents (pred scope)
-  "Rewrite SCOPE's parents so that only those matching PRED are
-left."
-  (while scope
-    (if-let ((parent (javaimp-scope-parent scope))
-             ((not (funcall pred parent))))
-        ;; Leave out this parent
-        (setf (javaimp-scope-parent scope) (javaimp-scope-parent parent))
-      (setq scope (javaimp-scope-parent scope)))))
+SCOPE-ALIST may contain scopes to use instead of copying.  Each
+entry is of the form (OPEN-BRACE . SCOPE).  When an entry is
+found, use it and stop going up the parent chain.  Note that all
+calls with the same SCOPE-ALIST should also use same
+PARENT-PRED."
+  (let* ((from-alist (alist-get (javaimp-scope-open-brace scope) scope-alist))
+         (tmp (or from-alist (copy-javaimp-scope scope)))
+         (res tmp)
+         parent)
+    (while (and (not from-alist)
+                (setq parent (javaimp-scope-parent tmp)))
+      (if (or (not parent-pred)
+              (funcall parent-pred parent))
+          ;; Include parent
+          (setq tmp
+                (setf (javaimp-scope-parent tmp)
+                      (or (setq from-alist
+                                (alist-get (javaimp-scope-open-brace parent)
+                                           scope-alist))
+                          (copy-javaimp-scope parent))))
+        ;; Skip parent
+        (setf (javaimp-scope-parent tmp) (javaimp-scope-parent parent))))
+    res))
 
 (defun javaimp-scope-concat-parents (scope)
   (let (parents)
@@ -721,7 +730,7 @@ Scope parents are filtered according to
 then no filtering is done."
   (javaimp-parse--all-scopes)
   (let ((pos (or end (point-max)))
-        scope res)
+        scope res scope-alist)
     (while (and (setq pos (previous-single-property-change
                            pos 'javaimp-parse-scope nil beg))
                 (or (not beg)
@@ -731,11 +740,19 @@ then no filtering is done."
                  (javaimp-scope-type scope)
                  (or (null pred)
                      (funcall pred scope)))
-        (setq scope (javaimp-scope-copy scope))
-        (unless no-filter
-          (javaimp-scope-filter-parents
-           #'javaimp-parse--scope-type-defun-p scope))
-        (push scope res)))
+        (setq scope
+              (javaimp-scope-copy
+               scope (unless no-filter #'javaimp-parse--scope-type-defun-p)
+               scope-alist))
+        (push scope res)
+        ;; Fill alist going up.  Stop at the first already existing
+        ;; entry because its parents are already there too.
+        (let ((tmp scope) done)
+          (while (and tmp (not done))
+            (if (alist-get (javaimp-scope-open-brace tmp) scope-alist)
+                (setq done t)
+              (setf (alist-get (javaimp-scope-open-brace tmp) scope-alist) tmp)
+              (setq tmp (javaimp-scope-parent tmp)))))))
     res))
 
 (defun javaimp-parse-get-enclosing-scope (&optional pred no-filter)
@@ -749,11 +766,8 @@ then no filtering is done."
   (save-excursion
     (javaimp-parse--all-scopes))
   (when-let ((scope (javaimp-parse--enclosing-scope pred)))
-    (setq scope (javaimp-scope-copy scope))
-    (unless no-filter
-      (javaimp-scope-filter-parents
-       #'javaimp-parse--scope-type-defun-p scope))
-    scope))
+    (javaimp-scope-copy scope (unless no-filter
+                                #'javaimp-parse--scope-type-defun-p))))
 
 (defun javaimp-parse-get-defun-decl-start (&optional bound)
   "Return the position of the start of defun declaration at point,
