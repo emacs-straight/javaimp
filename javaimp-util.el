@@ -125,8 +125,8 @@ return a list of strings - jar file names.")
 (defun javaimp-tree-build (this all child-p &optional parent-node sort-pred)
   "Recursively builds tree for element THIS and its children.
 Children are those elements from ALL for which CHILD-P invoked
-with this element and tested element returns non-nil.  Children
-are sorted by SORT-PRED, if given.  PARENT-NODE is indented for
+with THIS and tested element returns non-nil.  Children are
+sorted by SORT-PRED, if given.  PARENT-NODE is indented for
 recursive calls."
   (let ((children (seq-filter (apply-partially child-p this)
                               all)))

@@ -121,7 +121,7 @@ Exception4<? super Exception5>>")
   (declare (indent 1))
   (dolist (item test-items)
     (javaimp-with-temp-buffer nil
-      (insert (nth 0 item))
+      (insert (car item))
       (let* ((javaimp-parse--scope-hook (javaimp-parse--wrap-parser parser))
              (scopes (mapcar #'javaimp-test-parse--simplify-scope
                              (javaimp-parse-get-all-scopes nil nil nil t))))
@@ -150,6 +150,8 @@ implements Interface1<Bar, Baz>, Interface2 {"
     '("class Foo<T extends Baz<? extends Baz2>> \
 extends Bar<? extends Baz<? extends Baz2>> {"
       ((class "Foo")))
+    '("protected abstract class Foo {"
+      ((class "Foo" abstract t)))
     '("interface Foo<Bar, Baz> {"
       ((interface "Foo")))
     '("private enum Foo {"
@@ -159,17 +161,17 @@ extends Bar<? extends Baz<? extends Baz2>> {"
 (ert-deftest javaimp-parse-scope-anon-class ()
   (javaimp-test-parse--scope #'javaimp-parse--scope-anon-class
     '(" = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {"
-      ((anon-class "<anon>Object")))
+      ((anon-class "<anon51>Object")))
     `(,(subst-char-in-string
         ?  ?\n
         " = new Object < Class1 , Class2 > ( 1 + 1 , baz ) {")
-      ((anon-class "<anon>Object")))
+      ((anon-class "<anon51>Object")))
     '("new Object(foo()) {"
-      ((anon-class "<anon>Object")))
+      ((anon-class "<anon19>Object")))
     '(" = (obj.getField()) .new Object<Class1, Class2>(1, baz) {"
-      ((anon-class "<anon>Object")))
+      ((anon-class "<anon57>Object")))
     '(" = obj.new Object<>(1, baz) {"
-      ((anon-class "<anon>Object")))
+      ((anon-class "<anon29>Object")))
     ))
 
 (ert-deftest javaimp-parse-scope-method-or-stmt ()
@@ -241,44 +243,44 @@ throws E1 {"
 
             ((method "foo()") (class "CInner1") (class "Top"))
 
-            ((local-class "CInner1_CLocal1")
+            ((local-class "<local192>CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (local-class "CInner1_CLocal1")
+             (local-class "<local192>CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
-            ((local-class "CInner1_CLocal1_CLocal1")
+            ((local-class "<local384>CInner1_CLocal1_CLocal1")
              (method "foo()")
-             (local-class "CInner1_CLocal1")
+             (local-class "<local192>CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (local-class "CInner1_CLocal1_CLocal1")
+             (local-class "<local384>CInner1_CLocal1_CLocal1")
              (method "foo()")
-             (local-class "CInner1_CLocal1")
+             (local-class "<local192>CInner1_CLocal1")
              (method "foo()") (class "CInner1") (class "Top"))
 
-            ((local-class "CInner1_CLocal2")
+            ((local-class "<local692>CInner1_CLocal2")
              (method "foo()") (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (local-class "CInner1_CLocal2")
+             (local-class "<local692>CInner1_CLocal2")
              (method "foo()") (class "CInner1") (class "Top"))
 
-            ((anon-class "<anon>Object")
+            ((anon-class "<anon895>Object")
              (class "CInner1") (class "Top"))
 
             ((method "toString()")
-             (anon-class "<anon>Object") (class "CInner1") (class "Top"))
+             (anon-class "<anon895>Object") (class "CInner1") (class "Top"))
 
-            ((class "CInner1_CInner1") (class "CInner1") (class "Top"))
+            ((class "CInner1_CInner1" abstract t) (class "CInner1") (class "Top"))
 
             ((method "foo()")
-             (class "CInner1_CInner1") (class "CInner1") (class "Top"))
+             (class "CInner1_CInner1" abstract t) (class "CInner1") (class "Top"))
 
             ((method "bar()")
-             (class "CInner1_CInner1") (class "CInner1") (class "Top"))
+             (class "CInner1_CInner1" abstract t) (class "CInner1") (class "Top"))
 
             ((interface "IInner1") (class "Top"))
 
@@ -329,7 +331,11 @@ throws E1 {"
 (defun javaimp-test-parse--simplify-scope (s)
   (let (res)
     (while s
-      (push (list (javaimp-scope-type s) (javaimp-scope-name s)) res)
+      (push (append
+             (list (javaimp-scope-type s)
+                   (javaimp-scope-name s))
+             (javaimp-scope-attrs s))
+            res)
       (setq s (javaimp-scope-parent s)))
     (nreverse res)))
 

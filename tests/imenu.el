@@ -17,35 +17,52 @@
       (javaimp-test-imenu--simplify-entries (cdr elt)))))
 
 
-(ert-deftest javaimp-imenu-create-index ()
+(ert-deftest javaimp-imenu-create-index-flat ()
   (let ((actual (javaimp-with-temp-buffer "test1.java"
-                  (javaimp-imenu-create-index)))
+                  (javaimp-imenu--create-index-flat)))
         (expected-names
-         '("foo() [Top.CInner1]"
+         '("Top"
+           "CInner1"
+           "foo() [Top.CInner1]"
+           "<local192>CInner1_CLocal1"
+           "foo() [Top.CInner1.foo().<local192>CInner1_CLocal1]"
+           "<local384>CInner1_CLocal1_CLocal1"
+           "foo() [Top.CInner1.foo().<local192>CInner1_CLocal1.foo()\
+.<local384>CInner1_CLocal1_CLocal1]"
+           "<local692>CInner1_CLocal2"
+           "foo() [Top.CInner1.foo().<local692>CInner1_CLocal2]"
+           "<anon895>Object"
+           "toString()"
+           "CInner1_CInner1"
            "foo() [Top.CInner1.CInner1_CInner1]"
            "abstract_method() [Top.CInner1.CInner1_CInner1]"
            "bar()"
            "baz() [Top.CInner1.CInner1_CInner1]"
+           "IInner1"
            "foo() [Top.IInner1]"
            "abstract_method() [Top.IInner1]"
+           "IInner1_CInner1"
            "foo() [Top.IInner1.IInner1_CInner1]"
            "baz() [Top.IInner1]"
            "defaultMethod(String) [Top.IInner1]"
+           "IInner1_IInner1"
            "foo() [Top.IInner1.IInner1_IInner1]"
            "defaultMethod(String) [Top.IInner1.IInner1_IInner1]"
            "baz() [Top.IInner1.IInner1_IInner1]"
+           "EnumInner1"
            "EnumInner1()"
            "foo() [Top.EnumInner1]"
+           "EnumInner1_EInner1"
+           "ColocatedTop"
            "foo() [ColocatedTop]"
            "bar(String,String)")))
     (should (= (length expected-names) (length actual)))
     (dotimes (i (length expected-names))
       (should (equal (nth i expected-names) (car (nth i actual)))))))
 
-(ert-deftest javaimp-imenu-create-index-use-sub-alists ()
+(ert-deftest javaimp-imenu-create-index-nested ()
   (let ((actual (javaimp-with-temp-buffer "test1.java"
-                  (let ((javaimp-imenu-use-sub-alists t))
-                    (javaimp-imenu-create-index))))
+                    (javaimp-imenu--create-index-nested)))
         (expected
          '(("Top"
             ("CInner1"

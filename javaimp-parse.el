@@ -18,6 +18,17 @@
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+;; When changing parsing, it may make sense to benchmark performance
+;; on a large source tree with something like this:
+;;
+;; (benchmark-run 1
+;;   (javaimp-flush-cache)
+;;   (javaimp--read-dir-source-idents
+;;    (javaimp-scope-defun-p t)
+;;    "<path-to-jdk-source>/src/java.base/share/classes/"
+;;    "bench"))
+
+
 (require 'cc-mode)                      ;for java-mode-syntax-table
 (require 'cl-lib)
 (require 'seq)
@@ -32,7 +43,10 @@
   open-brace
   (parent
    nil
-   :documentation "Reference to parent scope struct."))
+   :documentation "Reference to parent scope struct.")
+  (attrs
+   nil
+   :documentation "Attributes plist"))
 
 
 (defconst javaimp-scope-all-types
@@ -343,12 +357,13 @@ PARENT-PRED."
       (push scope parents))
     (mapconcat #'javaimp-scope-name parents ".")))
 
-(defsubst javaimp-scope-test-type (scope leaf-types parent-types)
+(defsubst javaimp-scope-test-type (scope leaf-types &optional parent-types)
   (declare (indent 1))
   (let ((res (memq (javaimp-scope-type scope) leaf-types)))
-    (while (and res
-                (setq scope (javaimp-scope-parent scope)))
-      (setq res (memq (javaimp-scope-type scope) parent-types)))
+    (when parent-types
+      (while (and res
+                  (setq scope (javaimp-scope-parent scope)))
+        (setq res (memq (javaimp-scope-type scope) parent-types))))
     res))
 
 (defun javaimp-scope-defun-p (&optional include-also)
@@ -364,6 +379,8 @@ methods.  If INCLUDE-ALSO is t, include methods, as well as local
                    '(anon-class local-class))))
         (parent-types
          (if (eq include-also t)
+             ;; Anonymous / local classes may be inside non-defun
+             ;; scopes
              javaimp-scope-all-types
            '(class interface enum))))
     (lambda (s)
@@ -426,11 +443,18 @@ brace.")
       ;; or there weren't any of them.
       (setq arglist (javaimp-parse--arglist keyword-end (point) t))
       (when (= (length arglist) 1)
-        (make-javaimp-scope :type (intern
-                                   (buffer-substring-no-properties
-                                    keyword-start keyword-end))
-                            :name (javaimp-parse--substr-before-< (caar arglist))
-                            :start keyword-start)))))
+        (let* ((type (intern (buffer-substring-no-properties
+                              keyword-start keyword-end)))
+               (attrs
+                (when-let (((eq type 'class))
+                           (decl-start (javaimp-parse--decl-prefix)))
+                  (goto-char brace-pos)
+                  (when (javaimp-parse--rsb-keyword "\\_<abstract\\_>" decl-start t)
+                    '(abstract t)))))
+          (make-javaimp-scope :type type
+                              :name (javaimp-parse--substr-before-< (caar arglist))
+                              :start keyword-start
+                              :attrs attrs))))))
 
 (defun javaimp-parse--scope-simple-stmt (_brace-pos)
   "Attempts to parse `simple-statement' scope.  Currently block
@@ -449,7 +473,7 @@ lambdas are also recognized as such."
           :start (match-beginning 1)))))
 
 (defun javaimp-parse--scope-anon-class (brace-pos)
-  "Attempts to parse anonymous class scope."
+  "Attempts to parse `anon-class' scope."
   ;; skip arg-list and ws
   (when (and (progn
                (javaimp-parse--skip-back-until)
@@ -464,9 +488,10 @@ lambdas are also recognized as such."
               arglist (javaimp-parse--arglist (match-end 0) end t))
         (when (= (length arglist) 1)
           (make-javaimp-scope :type 'anon-class
-                              :name
-                              (concat "<anon>"
-                                      (javaimp-parse--substr-before-< (caar arglist)))
+                              :name (format "<anon%d>%s"
+                                            brace-pos
+                                            (javaimp-parse--substr-before-<
+                                             (caar arglist)))
                               :start start))))))
 
 (defun javaimp-parse--scope-method-or-stmt (brace-pos)
@@ -544,7 +569,8 @@ we have full chain of scope nesting:
 - If a `class' is nested in `method' (possibly within
 statements), then it's changed to `local-class'.
 - If an unrecognized scope (with nil type) is nested directly in
-`array-init' then it's changed to `array-init'.
+`array-init' then it's changed to `array-init'.  This applies
+recursively.
 
 If point is inside of any comment/string then this function does
 nothing."
@@ -577,8 +603,12 @@ nothing."
         ;; once.
         (cond ((and (eq 'class (javaimp-scope-type curr))
                     in-method)
-               ;; Class nested in method is "local class"
-               (setf (javaimp-scope-type curr) 'local-class))
+               ;; Change to local-class
+               (setf (javaimp-scope-type curr) 'local-class
+                     (javaimp-scope-name curr)
+                     (format "<local%d>%s"
+                             (javaimp-scope-open-brace curr)
+                             (javaimp-scope-name curr))))
               ((and parent
                     (eq 'array-init (javaimp-scope-type parent))
                     (not (javaimp-scope-type curr)))
@@ -607,7 +637,8 @@ call this function first."
       (remove-text-properties javaimp-parse--dirty-pos (point-max)
                               '(javaimp-parse-scope nil))
       (goto-char (point-max))
-      (let (;; Can be removed when we no longer rely on cc-mode
+      (let (;; Ignore syntax-table properties set by cc-mode.  Can be
+            ;; removed when we no longer rely on cc-mode.
             (parse-sexp-lookup-properties nil))
         (while (javaimp-parse--rsb-keyword "{" javaimp-parse--dirty-pos t)
           (save-excursion
@@ -643,44 +674,24 @@ call this function first."
               (setq state (syntax-ppss)))
           (throw 'found nil))))))
 
-(defun javaimp-parse--class-abstract-methods ()
-  (goto-char (point-max))
-  (let (res)
-    (while (javaimp-parse--rsb-keyword "\\_<abstract\\_>" nil t)
-      (save-excursion
-        (let ((enclosing (nth 1 (syntax-ppss))))
-          (when (and enclosing
-                     (javaimp-parse--rsb-keyword ";" nil t -1)
-                     ;; are we in the same nest?
-                     (= (nth 1 (syntax-ppss)) enclosing))
-            (backward-char)        ;skip semicolon
-            ;; now parse as normal method scope
-            (when-let ((scope (javaimp-parse--scope-method-or-stmt (point)))
-                       ;; note that an abstract method with no parents
-                       ;; will be ignored
-                       (parent (javaimp-parse--scopes nil)))
-              (setf (javaimp-scope-parent scope) (javaimp-scope-copy parent))
-              (push scope res))))))
-    res))
-
-(defun javaimp-parse--interface-abstract-methods (int-scope)
-  (let ((start (1+ (javaimp-scope-open-brace int-scope)))
+(defun javaimp-parse--abstract-methods (parent-scope)
+  (let ((start (1+ (javaimp-scope-open-brace parent-scope)))
         (end (ignore-errors
-               (1- (scan-lists (javaimp-scope-open-brace int-scope) 1 0))))
+               (1- (scan-lists (javaimp-scope-open-brace parent-scope) 1 0))))
         res)
-    (when (and start end)
-      (goto-char end)
-      (while (and (> (point) start)
-                  (javaimp-parse--rsb-keyword ";" start t))
-        ;; are we in the same nest?
-        (if (= (nth 1 (syntax-ppss)) (javaimp-scope-open-brace int-scope))
-            (save-excursion
-              ;; now parse as normal method scope
-              (when-let ((scope (javaimp-parse--scope-method-or-stmt (point))))
-                (setf (javaimp-scope-parent scope) int-scope)
-                (push scope res)))
-          ;; we've entered another nest, go back to its start
-          (goto-char (nth 1 (syntax-ppss))))))
+    (goto-char (or end (point-max)))
+    (while (and (> (point) start)
+                (javaimp-parse--rsb-keyword ";" start t))
+      ;; Are we in the same nest?
+      (if (= (nth 1 (syntax-ppss)) (javaimp-scope-open-brace parent-scope))
+          (save-excursion
+            ;; Parse as normal method scope, but don't set open-brace
+            ;; because there's no body
+            (when-let ((scope (javaimp-parse--scope-method-or-stmt (point))))
+              (setf (javaimp-scope-parent scope) parent-scope)
+              (push scope res)))
+        ;; We've entered another nest, skip to its start
+        (goto-char (nth 1 (syntax-ppss)))))
     res))
 
 
@@ -778,22 +789,10 @@ outside paren constructs like arg-list."
     (javaimp-parse--all-scopes))
   (javaimp-parse--decl-prefix bound))
 
-(defun javaimp-parse-get-class-abstract-methods ()
-  "Return all scopes which are abstract methods in classes."
+(defun javaimp-parse-get-abstract-methods (scope)
+  "Return abstract methods defined in SCOPE."
   (javaimp-parse--all-scopes)
-  (javaimp-parse--class-abstract-methods))
-
-(defun javaimp-parse-get-interface-abstract-methods ()
-  "Return all scopes which are abstract methods in interfaces."
-  (javaimp-parse--all-scopes)
-  (let ((interfaces (javaimp-parse-get-all-scopes
-                     nil nil
-                     (lambda (s)
-                       (javaimp-scope-test-type s
-                         '(interface) '(class interface enum))))))
-    (seq-mapcat #'javaimp-parse--interface-abstract-methods
-                interfaces)))
-
+  (javaimp-parse--abstract-methods scope))
 
 (defun javaimp-parse-fully-parsed-p ()
   "Return non-nil if current buffer is fully parsed."

@@ -184,7 +184,10 @@ the leading slash)."
 
 (defcustom javaimp-imenu-use-sub-alists nil
   "If non-nil, make sub-alist for each containing scope (e.g. a
-class)."
+class).  In this case, scopes nested inside methods (local
+classes, anonymous classes and their methods) are not shown,
+because otherwise it won't be possible to go to the method
+itself.  Non-method scopes with no children are also omitted."
   :type 'boolean)
 
 (defcustom javaimp-jar-program "jar"
@@ -407,7 +410,7 @@ then just return `default-directory'."
 (defun javaimp--read-dir-source-idents (scope-pred dir what-desc)
   (javaimp--collect-from-source-dir
    (apply-partially #'javaimp--collect-idents scope-pred)
-    dir 'javaimp--source-idents-cache what-desc))
+   dir 'javaimp--source-idents-cache what-desc))
 
 (defun javaimp--collect-idents (scope-pred buf file)
   "Return all identifiers satisfying SCOPE-PRED in buffer BUF,
@@ -790,80 +793,84 @@ form as CLASS-ALIST in return value of
 
 ;;;###autoload
 (defun javaimp-imenu-create-index ()
-  "Function to use as `imenu-create-index-function', can be set
-in a major mode hook."
-  (let ((forest (javaimp-imenu--get-forest)))
-    (if javaimp-imenu-use-sub-alists
-        (javaimp-tree-map-nodes
-         (lambda (scope)
-           (if (eq (javaimp-scope-type scope) 'method)
-               ;; leaf entry for method
-               (cons nil (javaimp-imenu--make-entry scope))
-             ;; sub-alist for class-like
-             (cons t (javaimp-scope-name scope))))
-         (lambda (res)
-           (or (functionp (nth 2 res))  ; leaf imenu entry
-               (cdr res)))              ; non-empty sub-alist
-         forest)
-      ;; Flat list - currently only methods
-      (let* ((methods (javaimp-tree-collect-nodes
-                       (lambda (scope)
-                         (eq (javaimp-scope-type scope) 'method))
-                       forest))
-             (entries
-              (mapcar #'javaimp-imenu--make-entry
-                      (seq-sort-by #'javaimp-scope-start #'< methods)))
-             alist)
-        (mapc (lambda (entry)
-                (setf (alist-get (car entry) alist 0 nil #'equal)
-                      (1+ (alist-get (car entry) alist 0 nil #'equal))))
-              entries)
-        ;; Append parents to equal names to disambiguate them
-        (mapc (lambda (entry)
-                (when (> (alist-get (car entry) alist 0 nil #'equal) 1)
-                  (setcar entry
-                          (format "%s [%s]"
-                                  (car entry)
-                                  (javaimp-scope-concat-parents
-                                   (nth 3 entry))))))
-              entries)))))
+  "Function to use as `imenu-create-index-function'.
+How to show the index is determined by
+`javaimp-imenu-use-sub-alists', which see."
+  (if javaimp-imenu-use-sub-alists
+      (javaimp-imenu--create-index-nested)
+    (javaimp-imenu--create-index-flat)))
 
-(defun javaimp-imenu--get-forest ()
-  "Subroutine of `javaimp-imenu-create-index'."
-  (let* ((scopes
-          (javaimp-parse-get-all-scopes nil nil
-                                        (javaimp-scope-defun-p 'method)))
-         (abstract-methods (append
-                            (javaimp-parse-get-class-abstract-methods)
-                            (javaimp-parse-get-interface-abstract-methods)))
+(defun javaimp-imenu--create-index-nested ()
+  "Build nested index for `javaimp-imenu-create-index'.  Scopes
+nested in methods are not included, see
+`javaimp-imenu-use-sub-alists' for explanation."
+  (let ((forest (javaimp-imenu--get-forest
+                 (javaimp-scope-defun-p 'method))))
+    (javaimp-tree-map-nodes
+     (lambda (scope)
+       (if (eq (javaimp-scope-type scope) 'method)
+           ;; Leaf entry for method
+           (cons nil (javaimp-imenu--make-entry scope))
+         ;; Sub-alist for container defuns - classes etc.
+         (cons t (javaimp-scope-name scope))))
+     (lambda (res)
+       (or (functionp (nth 2 res))      ; leaf imenu entry
+           (cdr res)))                  ; non-empty sub-alist
+     forest)))
 
-         methods classes top-classes)
-    (dolist (s scopes)
-      (if (eq (javaimp-scope-type s) 'method)
-          (push s methods)
-        (push s classes)
-        (when (null (javaimp-scope-parent s))
-          (push s top-classes))))
-    (setq methods (nreverse methods)
-          classes (nreverse classes)
-          top-classes (nreverse top-classes))
+(defun javaimp-imenu--create-index-flat ()
+  "Build flat index for `javaimp-imenu-create-index'."
+  (let* ((forest (javaimp-imenu--get-forest
+                  (javaimp-scope-defun-p t)))
+         (entries
+          (mapcar #'javaimp-imenu--make-entry
+                  (seq-sort-by #'javaimp-scope-start #'<
+                               (javaimp-tree-collect-nodes #'always forest))))
+         alist)
+    (mapc (lambda (entry)
+            (setf (alist-get (car entry) alist 0 nil #'equal)
+                  (1+ (alist-get (car entry) alist 0 nil #'equal))))
+          entries)
+    ;; Append parents to equal names to disambiguate them
+    (mapc (lambda (entry)
+            (when (> (alist-get (car entry) alist 0 nil #'equal) 1)
+              (setcar entry
+                      (format "%s [%s]"
+                              (car entry)
+                              (javaimp-scope-concat-parents
+                               (nth 3 entry))))))
+          entries)))
+
+(defun javaimp-imenu--get-forest (scope-pred)
+  "Build forest for imenu from scopes matching SCOPE-PRED."
+  (let* ((scopes (javaimp-parse-get-all-scopes nil nil scope-pred))
+         ;; Note that as these are abstract methods, open-brace is nil
+         ;; for them.  Represent them as scopes for convenience.
+         (abstract-methods
+          (mapcan
+           #'javaimp-parse-get-abstract-methods
+           (seq-filter
+            (lambda (s)
+              (or (eq (javaimp-scope-type s) 'interface)
+                  (plist-get (javaimp-scope-attrs s) 'abstract)))
+            scopes))))
     (mapcar
-     (lambda (top-class)
+     (lambda (top-defun)
        (when javaimp-verbose
          (message "Building tree for top-level %s %s"
-                  (javaimp-scope-type top-class)
-                  (javaimp-scope-name top-class)))
-       (javaimp-tree-build top-class
-                           (append methods
-                                   classes
-                                   abstract-methods)
+                  (javaimp-scope-type top-defun)
+                  (javaimp-scope-name top-defun)))
+       (javaimp-tree-build top-defun
+                           (append scopes abstract-methods)
                            (lambda (el tested)
-                             (equal el (javaimp-scope-parent tested)))
+                             (eq el (javaimp-scope-parent tested)))
                            nil
                            (lambda (s1 s2)
                              (< (javaimp-scope-start s1)
                                 (javaimp-scope-start s2)))))
-     top-classes)))
+     (seq-filter (lambda (s)
+                   (not (javaimp-scope-parent s)))
+                 scopes))))
 
 (defun javaimp-imenu--function (_index-name index-position _scope)
   (let ((decl-beg (javaimp--beg-of-defun-decl index-position)))
@@ -879,6 +886,7 @@ in a major mode hook."
 (defun javaimp-xref--backend () 'javaimp)
 
 (defun javaimp-xref--ident-completion-table ()
+  ;; FIXME: Include local classes and abstract methods
   (let ((scope-pred (javaimp-scope-defun-p 'method))
         (module (javaimp--detect-module)))
     (if module
@@ -1273,6 +1281,7 @@ defun javadoc to be included in the narrowed region when using
         (setq-local multibyte-syntax-as-symbol t)
         ;; Discard parse state, if any
         (setq javaimp-parse--dirty-pos nil)
+        (setq syntax-ppss-table java-mode-syntax-table)
         ;; There're spaces within generic types, just show them
         (setq-local imenu-space-replacement nil))
     (remove-function (local 'imenu-create-index-function)
