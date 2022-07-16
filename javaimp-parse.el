@@ -146,7 +146,8 @@ Assumes point is outside of any context initially."
 (defun javaimp-parse--arglist (beg end &optional only-type)
   "Parse arg list between BEG and END, of the form 'TYPE NAME,
 ...'.  Return list of conses (TYPE . NAME).  If ONLY-TYPE is
-non-nil, then name parsing is skipped."
+non-nil, then name parsing is skipped.  This function does not
+move point."
   (let ((substr (buffer-substring-no-properties beg end)))
     (with-temp-buffer
       (insert substr)
@@ -260,31 +261,30 @@ set, as for `re-search-backward'."
                 (= (scan-lists pos 1 -1)
                    (1+ open-brace)))))))
 
-(defun javaimp-parse--decl-suffix (regexp brace-pos &optional bound)
-  "Attempts to parse declaration suffix backwards from point (but
-not farther than BOUND), returning non-nil on success.  More
-precisely, the value is the end of the match for REGEXP.  Point
-is left before the match.  Otherwise, the result is nil and point
-is unchanged."
-  (let ((pos (point)))
-    (catch 'found
-      (while (javaimp-parse--rsb-keyword regexp bound t)
-        (let ((scan-pos (match-end 0)))
+(defun javaimp-parse--decl-suffix (regexp brace-pos bound)
+  "Attempt to parse declaration suffix matching REGEXP backwards
+from BRACE-POS, but not farther than BOUND.  Return its start on
+success, nil otherwise."
+  (goto-char brace-pos)
+  (catch 'found
+    (while (javaimp-parse--rsb-keyword regexp bound t)
+      (let ((curr-beg (match-beginning 0))
+            (substr (buffer-substring-no-properties
+                     (match-end 0) (1+ brace-pos))))
+        (with-temp-buffer
+          (insert substr)
           (with-syntax-table javaimp--parse-syntax-table
-            ;; Skip over any number of lists, which may be exceptions
-            ;; in "throws", or something like that
-            (while (and scan-pos (<= scan-pos brace-pos))
-              (if (ignore-errors
-                    (= (scan-lists scan-pos 1 -1) ;As in javaimp-parse--preceding
-                       (1+ brace-pos)))
-                  (progn
-                    (goto-char (match-beginning 0))
-                    (throw 'found (match-end 0)))
-                (setq scan-pos (ignore-errors
-                                 (scan-lists scan-pos 1 0))))))))
-      ;; just return to start
-      (goto-char pos)
-      nil)))
+            ;; Skip over any number of "lists", which may be
+            ;; exceptions in "throws", or something alike
+            (let ((scan-pos (point-min)))
+              (while (and scan-pos (< scan-pos (point-max)))
+                (if (ignore-errors
+                      ;; We're done when we enter the brace block
+                      ;; started by brace-pos
+                      (= (scan-lists scan-pos 1 -1) (point-max)))
+                    (throw 'found curr-beg)
+                  (setq scan-pos (ignore-errors
+                                   (scan-lists scan-pos 1 0))))))))))))
 
 (defun javaimp-parse--decl-prefix (&optional bound)
   "Attempt to parse defun declaration prefix backwards from
@@ -432,21 +432,23 @@ brace.")
              (1+ (point)))))
     (let* ((keyword-start (match-beginning 1))
            (keyword-end (match-end 1))
-           arglist)
-      (goto-char brace-pos)
-      ;; "extends" comes before "implements" etc., thus try in this
-      ;; order
-      (or (javaimp-parse--decl-suffix "\\_<extends\\_>" brace-pos keyword-end)
-          (javaimp-parse--decl-suffix "\\_<implements\\_>" brace-pos keyword-end)
-          (javaimp-parse--decl-suffix "\\_<permits\\_>" brace-pos keyword-end))
-      ;; We either skipped back over the valid declaration suffixes,
-      ;; or there weren't any of them.
-      (setq arglist (javaimp-parse--arglist keyword-end (point) t))
+           (arglist-end
+            ;; "extends" comes before "implements" etc., thus try in
+            ;; this order
+            (or (javaimp-parse--decl-suffix
+                 "\\_<extends\\_>" brace-pos keyword-end)
+                (javaimp-parse--decl-suffix
+                 "\\_<implements\\_>" brace-pos keyword-end)
+                (javaimp-parse--decl-suffix
+                 "\\_<permits\\_>" brace-pos keyword-end)))
+           (arglist (javaimp-parse--arglist
+                     keyword-end (or arglist-end brace-pos) t)))
       (when (= (length arglist) 1)
         (let* ((type (intern (buffer-substring-no-properties
                               keyword-start keyword-end)))
                (attrs
                 (when-let (((eq type 'class))
+                           ;; TODO define start point, pass as arg
                            (decl-start (javaimp-parse--decl-prefix)))
                   (goto-char brace-pos)
                   (when (javaimp-parse--rsb-keyword "\\_<abstract\\_>" decl-start t)
@@ -495,23 +497,24 @@ lambdas are also recognized as such."
                               :start start))))))
 
 (defun javaimp-parse--scope-method-or-stmt (brace-pos)
-  "Attempts to parse `method' or `statement' scope."
-  (let (;; take the closest preceding closing paren as the bound
-        (throws-search-bound (save-excursion
-                               (when (javaimp-parse--rsb-keyword ")" nil t 1)
-                                 (1+ (point))))))
+  "Attempt to parse `method' or `statement' scope."
+  ;; Take the closest preceding closing paren as the bound
+  (let ((throws-search-bound (when (javaimp-parse--rsb-keyword ")" nil t 1)
+                               (1+ (point)))))
     (when throws-search-bound
-      (let ((throws-args
-             (when-let ((pos (javaimp-parse--decl-suffix
-                              "\\_<throws\\_>" brace-pos throws-search-bound)))
-               (or (javaimp-parse--arglist pos brace-pos t)
-                   t))))
+      (let* ((throws-start (javaimp-parse--decl-suffix
+                            "\\_<throws\\_>" brace-pos throws-search-bound))
+             (throws-args (when throws-start
+                            (or (javaimp-parse--arglist
+                                 (+ throws-start (length "throws")) brace-pos t)
+                                t))))   ;invalid (nil is ok)
         (when (and (not (eq throws-args t))
                    (progn
+                     (goto-char (or throws-start brace-pos))
                      (javaimp-parse--skip-back-until)
                      (= (char-before) ?\)))
                    (ignore-errors
-                     ;; for method this is arglist
+                     ;; For method this is arglist
                      (goto-char
                       (scan-lists (point) -1 0))))
           (let* (;; leave open/close parens out

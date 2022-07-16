@@ -25,6 +25,8 @@
 (require 'seq)
 (require 'xml)
 
+(eval-when-compile (require 'subr-x))
+
 (defconst javaimp-basedir (file-name-directory load-file-name))
 
 (defcustom javaimp-java-home

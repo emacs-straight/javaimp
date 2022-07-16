@@ -141,6 +141,8 @@
 (require 'imenu)
 (require 'xref)
 
+(eval-when-compile (require 'subr-x))
+
 ;; User options
 
 (defgroup javaimp ()

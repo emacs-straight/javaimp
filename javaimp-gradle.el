@@ -20,6 +20,8 @@
 
 (require 'javaimp-util)
 
+(eval-when-compile (require 'subr-x))
+
 (defcustom javaimp-gradle-program "gradle"
   "Path to the `gradle' program.  If the visited project has local
 gradlew (Gradle wrapper), it is used in preference."
