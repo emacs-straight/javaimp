@@ -148,17 +148,18 @@ Assumes point is outside of any context initially."
 ...'.  Return list of conses (TYPE . NAME).  If ONLY-TYPE is
 non-nil, then name parsing is skipped.  This function does not
 move point."
-  (let ((substr (buffer-substring-no-properties beg end)))
-    (with-temp-buffer
-      (insert substr)
+  (save-excursion
+    (save-restriction
+      (narrow-to-region beg end)
       (with-syntax-table javaimp--parse-syntax-table
         (ignore-errors
           (let (res)
+            (goto-char (point-max))
             (while (progn
                      (javaimp-parse--skip-back-until)
                      (not (bobp)))
               (push (javaimp-parse--arglist-one-arg only-type) res)
-              ;; move back to the previous argument, if any
+              ;; Move back to the previous argument, if any
               (when (javaimp-parse--skip-back-until
                      (lambda (_last-what _last-pos)
                        (and (not (bobp))
@@ -262,62 +263,73 @@ set, as for `re-search-backward'."
                    (1+ open-brace)))))))
 
 (defun javaimp-parse--decl-suffix (regexp brace-pos bound)
-  "Attempt to parse declaration suffix matching REGEXP backwards
-from BRACE-POS, but not farther than BOUND.  Return its start on
-success, nil otherwise."
+  "Attempt to parse defun declaration suffix (like \"extends\"
+clause of a class definition) matched by REGEXP.  Matches inside
+comments/strings are skipped.
+
+Find match of REGEXP backwards from BRACE-POS (but not farther
+than BOUND) and skip complete lists forwards from there, until we
+enter the list started by brace at BRACE-POS.  If successful,
+repeat those steps starting from the last match.  The result is
+the start of the last successful match, or nil."
   (goto-char brace-pos)
   (catch 'found
     (while (javaimp-parse--rsb-keyword regexp bound t)
-      (let ((curr-beg (match-beginning 0))
-            (substr (buffer-substring-no-properties
-                     (match-end 0) (1+ brace-pos))))
-        (with-temp-buffer
-          (insert substr)
-          (with-syntax-table javaimp--parse-syntax-table
-            ;; Skip over any number of "lists", which may be
-            ;; exceptions in "throws", or something alike
-            (let ((scan-pos (point-min)))
-              (while (and scan-pos (< scan-pos (point-max)))
-                (if (ignore-errors
-                      ;; We're done when we enter the brace block
-                      ;; started by brace-pos
-                      (= (scan-lists scan-pos 1 -1) (point-max)))
-                    (throw 'found curr-beg)
-                  (setq scan-pos (ignore-errors
-                                   (scan-lists scan-pos 1 0))))))))))))
+      (let ((curr-beg (match-beginning 0)))
+        (save-excursion
+          (save-restriction
+            (narrow-to-region (match-end 0) (1+ brace-pos))
+            (with-syntax-table javaimp--parse-syntax-table
+              ;; Skip over any number of "lists", which may be
+              ;; exceptions in "throws" clause, or something alike
+              (let ((scan-pos (point-min)))
+                (while (and scan-pos (< scan-pos (point-max)))
+                  (if (ignore-errors
+                        ;; We're done when we enter the brace block
+                        ;; started by brace-pos
+                        (= (scan-lists scan-pos 1 -1) (point-max)))
+                      (throw 'found curr-beg)
+                    (setq scan-pos (ignore-errors
+                                     (scan-lists scan-pos 1 0)))))))))))))
 
-(defun javaimp-parse--decl-prefix (&optional bound)
+(defun javaimp-parse--decl-prefix (start-pos &optional bound)
   "Attempt to parse defun declaration prefix backwards from
-point (but not farther than BOUND).  Matches inside comments /
-strings are skipped.  Return the beginning of the match (then the
-point is also at that position) or nil."
+START-POS, but not farther than BOUND.  START-POS should be
+somewhere inside the defun declaration, but not inside nested
+lists like argument list.  Return the beginning of the
+declaration or nil."
+  (goto-char start-pos)
   (javaimp-parse--skip-back-until)
-  ;; A semicolon, which delimits statements, will just be skipped by
-  ;; scan-sexps, so find it and use as bound.  If it is in another
-  ;; scope, that's not a problem: we'll attempt to skip that scope,
-  ;; and exit the loop anyway.
-  (let* ((prev-semi (save-excursion
-                      (javaimp-parse--rsb-keyword ";" bound t)))
-         (bound (when (or bound prev-semi)
-                  (apply #'max
-                         (delq nil
-                               (list bound
-                                     (and prev-semi (1+ prev-semi)))))))
-         pos res)
-    ;; Go back by sexps
-    (with-syntax-table javaimp--parse-syntax-table
-      (while (and (ignore-errors
-                    (setq pos (scan-sexps (point) -1)))
-                  (or (not bound) (>= pos bound))
-                  (or (memql (char-after pos)
-                             '(?@ ?\(   ;annotation type / args
-                                  ?<    ;generic type
-                                  ?\[)) ;array
-                      ;; keyword / identifier first char: word or
-                      ;; symbol
-                      (memql (syntax-class (syntax-after pos)) '(2 3))))
-        (goto-char (setq res pos))))
-    res))
+  (let* ((fence (save-excursion
+                  ;; Semicolon is punctuation and would be skipped by
+                  ;; scan-sexp below, so it's necessary to have it
+                  ;; here.  Do not add braces here: they might appear
+                  ;; in annotations in declaration, in which case we
+                  ;; should skip them.
+                  (javaimp-parse--rsb-keyword ";" bound t)))
+         (bound (apply #'max
+                       (delq nil
+                             (list bound
+                                   (and fence (1+ fence))
+                                   (point-min))))))
+    (save-restriction
+      (narrow-to-region bound (point))
+      (with-syntax-table javaimp--parse-syntax-table
+        (let (pos res)
+          (goto-char (point-max))
+          ;; Go back by sexps
+          (while (and (ignore-errors
+                        (setq pos (scan-sexps (point) -1)))
+                      (or (memql (char-after pos)
+                                 '(?@ ?\(   ;annotation type / args
+                                      ?<    ;generic type
+                                      ?\[)) ;array
+                          ;; first char of keyword / identifier:
+                          ;; word or symbol
+                          (memql (syntax-class (syntax-after pos))
+                                 '(2 3))))
+            (goto-char (setq res pos)))
+          res)))))
 
 
 ;;; Scopes
@@ -419,7 +431,7 @@ methods.  If INCLUDE-ALSO is t, include methods, as well as local
 brace.")
 
 (defun javaimp-parse--scope-class (brace-pos)
-  "Attempts to parse class-like scope."
+  "Attempt to parse class-like scope."
   (when (javaimp-parse--preceding
          javaimp-parse--class-keywords-regexp
          brace-pos
@@ -448,10 +460,11 @@ brace.")
                               keyword-start keyword-end)))
                (attrs
                 (when-let (((eq type 'class))
-                           ;; TODO define start point, pass as arg
-                           (decl-start (javaimp-parse--decl-prefix)))
+                           (decl-start
+                            (javaimp-parse--decl-prefix keyword-start)))
                   (goto-char brace-pos)
-                  (when (javaimp-parse--rsb-keyword "\\_<abstract\\_>" decl-start t)
+                  (when (javaimp-parse--rsb-keyword
+                         "\\_<abstract\\_>" decl-start t)
                     '(abstract t)))))
           (make-javaimp-scope :type type
                               :name (javaimp-parse--substr-before-< (caar arglist))
@@ -459,7 +472,7 @@ brace.")
                               :attrs attrs))))))
 
 (defun javaimp-parse--scope-simple-stmt (_brace-pos)
-  "Attempts to parse `simple-statement' scope.  Currently block
+  "Attempt to parse `simple-statement' scope.  Currently block
 lambdas are also recognized as such."
   (javaimp-parse--skip-back-until)
   (cond ((looking-back "->" (- (point) 2))
@@ -475,7 +488,7 @@ lambdas are also recognized as such."
           :start (match-beginning 1)))))
 
 (defun javaimp-parse--scope-anon-class (brace-pos)
-  "Attempts to parse `anon-class' scope."
+  "Attempt to parse `anon-class' scope."
   ;; skip arg-list and ws
   (when (and (progn
                (javaimp-parse--skip-back-until)
@@ -542,7 +555,7 @@ lambdas are also recognized as such."
                :start (point)))))))))
 
 (defun javaimp-parse--scope-array-init (_brace-pos)
-  "Attempts to parse `array-init' scope."
+  "Attempt to parse `array-init' scope."
   (javaimp-parse--skip-back-until)
   (let (decl-prefix-beg)
     (when (or
@@ -551,14 +564,14 @@ lambdas are also recognized as such."
            ;; This will be non-nil for "top-level" array initializer.
            ;; Nested array initializers are handled by a special rule
            ;; in `javaimp-parse--scopes'.
-           (setq decl-prefix-beg (javaimp-parse--decl-prefix)))
+           (setq decl-prefix-beg (javaimp-parse--decl-prefix (point))))
       (make-javaimp-scope :type 'array-init
                           :name ""
                           :start decl-prefix-beg))))
 
 
 (defun javaimp-parse--scopes (count)
-  "Attempts to parse COUNT enclosing scopes at point.
+  "Attempt to parse COUNT enclosing scopes at point.
 Returns most nested one, with its parents sets accordingly.  If
 COUNT is nil then goes all the way up.
 
@@ -783,14 +796,14 @@ then no filtering is done."
     (javaimp-scope-copy scope (unless no-filter
                                 #'javaimp-parse--scope-type-defun-p))))
 
-(defun javaimp-parse-get-defun-decl-start (&optional bound)
-  "Return the position of the start of defun declaration at point,
-but not before BOUND.  Point should be at defun name, but
-actually can be anywhere within the declaration, as long as it's
-outside paren constructs like arg-list."
+(defun javaimp-parse-get-defun-decl-start (pos &optional bound)
+  "Return the position of the start of defun declaration at POS,
+but not before BOUND.  POS should be at defun name, but actually
+can be anywhere within the declaration, as long as it's outside
+paren constructs like arg-list."
   (save-excursion
     (javaimp-parse--all-scopes))
-  (javaimp-parse--decl-prefix bound))
+  (javaimp-parse--decl-prefix pos bound))
 
 (defun javaimp-parse-get-abstract-methods (scope)
   "Return abstract methods defined in SCOPE."

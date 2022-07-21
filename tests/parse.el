@@ -111,7 +111,7 @@ Exception4<? super Exception5>>")
     (javaimp-with-temp-buffer nil
       (insert (car data))
       (should (equal (cdr data)
-                     (javaimp-parse--decl-prefix))))))
+                     (javaimp-parse--decl-prefix (point)))))))
 
 
 

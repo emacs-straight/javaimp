@@ -371,6 +371,8 @@ Finally, already parsed buffers are processed in
         (lambda (file)
           (with-temp-buffer
             (insert-file-contents file)
+            (java-mode)
+            (javaimp-minor-mode)
             (funcall fun (current-buffer) file)))
         files cache-sym
         (concat what-desc
@@ -1105,8 +1107,7 @@ than BOUND."
   (save-excursion
     (save-restriction
       (widen)
-      (goto-char pos)
-      (javaimp-parse-get-defun-decl-start bound))))
+      (javaimp-parse-get-defun-decl-start pos bound))))
 
 (defun javaimp-end-of-defun ()
   "Function to be used as `end-of-defun-function'."
