@@ -61,14 +61,29 @@ Exception4<? super Exception5>>")
       (should (equal (javaimp-parse--arglist (point-min) (point-max) t)
                      (cdr data))))))
 
+(ert-deftest javaimp-parse-decl-suffix ()
+  (dolist (data '(;; ok
+                  (" extends C1 {" "extends" . 2)
+                  (" extends C1 implements I1, I2 {" "extends\\|implements" . 13)
+
+                  ;; fail
+                  (" extends C1 ({" "extends")
+                  ("{" "extends")))
+    (javaimp-with-temp-buffer nil
+      (insert (car data))
+      (should (equal (cddr data)
+                     (javaimp-parse--decl-suffix
+                      (cadr data) (1- (point)) (point-min)))))))
+
 (ert-deftest javaimp-parse-decl-prefix ()
   (dolist (data '(;; simple
                   (" void " . 2)
                   (" public static void " . 2)
 
-                  ;; no sexps
+                  ;; fail - no sexps
+                  ("")
                   (" ")
-                  ;; incomplete sexps
+                  ;; fail - incomplete sexps
                   ("var)")
                   (")   ")
 

@@ -294,10 +294,14 @@ the start of the last successful match, or nil."
 
 (defun javaimp-parse--decl-prefix (start-pos &optional bound)
   "Attempt to parse defun declaration prefix backwards from
-START-POS, but not farther than BOUND.  START-POS should be
-somewhere inside the defun declaration, but not inside nested
-lists like argument list.  Return the beginning of the
-declaration or nil."
+START-POS, but not farther than BOUND or previous semicolon,
+whichever comes first.  START-POS should be somewhere inside the
+defun declaration, but outside any nested lists like argument
+list.  Return the beginning of the declaration or nil.
+
+Go back by sexps until we either reach BOUND or a semicolon, or
+arrive at something which doesn't look like a part of defun
+declaration."
   (goto-char start-pos)
   (javaimp-parse--skip-back-until)
   (let* ((fence (save-excursion
