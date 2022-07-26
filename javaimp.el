@@ -877,11 +877,10 @@ nested in methods are not included, see
                  scopes))))
 
 (defun javaimp-imenu--function (_index-name index-position _scope)
-  (let ((decl-beg (javaimp--beg-of-defun-decl index-position)))
-    (if decl-beg
-        (goto-char decl-beg)
-      (goto-char index-position)
-      (back-to-indentation))))
+  (if-let ((decl-beg (javaimp--beg-of-defun-decl index-position)))
+      (goto-char decl-beg)
+    (goto-char index-position)
+    (back-to-indentation)))
 
 
 
@@ -1077,33 +1076,41 @@ buffer."
     (let* ((ctx (javaimp--get-sibling-context))
            (parent-start (nth 0 ctx))
            (offset-from-prev (if (> arg 0)
-                                 (1- arg)
+                                 (1- arg) ;prev counts for 1
                                arg))
            (target-idx (- (nth 1 ctx) offset-from-prev))
            (siblings (nthcdr 2 ctx)))
-      (if (or (not siblings)
-              (< target-idx 0)
-              (>= target-idx (length siblings)))
-          (if parent-start
-              ;; It's not very clear what to do when we need to move
-              ;; out of current scope.  Currently we just move up to
-              ;; parent, trying to also skip its decl prefix.  This
-              ;; gives acceptable results.
-              (goto-char (or (javaimp--beg-of-defun-decl parent-start)
-                             parent-start))
-            (goto-char (if (> arg 0)
-                           (point-min)
-                         (point-max)))
-            nil)
-        (let ((scope (nth target-idx siblings)))
-          (goto-char (or (javaimp--beg-of-defun-decl
-                          (javaimp-scope-start scope) parent-start)
-                         (javaimp-scope-open-brace scope))))))))
+      (cond ((and (>= target-idx 0)
+                  (< target-idx (length siblings)))
+             ;; Move to target sibling
+             (let ((scope (nth target-idx siblings)))
+               (goto-char (or (javaimp--beg-of-defun-decl
+                               (javaimp-scope-start scope) parent-start)
+                              (javaimp-scope-open-brace scope)))))
+            (siblings
+             ;; Move to start of first/last sibling
+             (goto-char (javaimp-scope-open-brace
+                         (car (if (< target-idx 0)
+                                  siblings
+                                (last siblings))))))
+            (parent-start
+             (goto-char parent-start)
+             ;; Move forward one line unless closing brace is on the
+             ;; same line
+             (let ((parent-end (ignore-errors
+                                 (scan-lists parent-start 1 0))))
+               (unless (and parent-end
+                            (= (line-number-at-pos parent-start)
+                               (line-number-at-pos parent-end)))
+                 (forward-line))))
+            (t
+             (goto-char (if (< target-idx 0)
+                            (point-min) (point-max))))))))
 
 (defun javaimp--beg-of-defun-decl (pos &optional bound)
   "Assuming POS is somewhere inside the defun declaration, return
 the beginning of that declaration.  Don't go farther backwards
-than BOUND."
+than BOUND.  POS should not be in arglist or similar list."
   (save-excursion
     (save-restriction
       (widen)
@@ -1125,7 +1132,8 @@ than BOUND."
  SIBLINGS), where SIBLINGS is a list of all sibling defun scopes.
 PREV-INDEX is the index of the \"previous\" (relative to point)
 scope in this list, or -1.  PARENT-START is the position of
-beginning (as in `javaimp-scope-start') of parent defun, if any.
+beginning (as in `javaimp-scope-open-brace') of parent defun, if
+any.
 
 Both when we're inside a method and between methods, the parent
 is the method's enclosing class.  When we're inside the method,
@@ -1158,37 +1166,10 @@ PREV-INDEX gives the index of the method itself."
                (lambda (s)
                  (and (funcall defun-pred s)
                       (funcall sibling-pred s)))))
-             ;; Note: when looking for prev/next sibling, it might be
-             ;; tempting to directly look at prev/next property
-             ;; change, but this would be correct only by accident -
-             ;; there might be any scopes in different nests in
-             ;; between.
-             (prev
-              (if (and enc (eq (javaimp-scope-type enc) 'method))
-                  enc
-                (if-let* ((next (seq-find
-                                 (lambda (s)
-                                   (>= (javaimp-scope-open-brace s) pos))
-                                 siblings))
-                          (next-beg-decl
-                           (javaimp--beg-of-defun-decl
-                            (javaimp-scope-start next) parent-beg))
-                          (beg-decl
-                           (javaimp--beg-of-defun-decl pos parent-beg))
-                          ((= next-beg-decl beg-decl)))
-                    ;; If we're inside next's declaration - behave as
-                    ;; if we were inside its body, so it becomes our
-                    ;; prev
-                    next
-                  ;; Just find previous defun
-                  (seq-find (lambda (s)
-                              (< (javaimp-scope-open-brace s) pos))
-                            (reverse siblings))))))
+             (prev (javaimp--get-prev-scope pos enc parent-beg siblings)))
         (nconc
          (list
-          ;; Return start, not open brace, as this is where we'd like
-          ;; to go when no sibling
-          (and parent (javaimp-scope-start parent))
+          (and parent (javaimp-scope-open-brace parent))
           (or (and prev
                    (seq-position siblings prev
                                  (lambda (s1 s2)
@@ -1196,6 +1177,42 @@ PREV-INDEX gives the index of the method itself."
                                       (javaimp-scope-open-brace s2)))))
               -1))
          siblings)))))
+
+(defun javaimp--get-prev-scope (pos enc parent-beg siblings)
+  "Subroutine of `javaimp--get-sibling-context'."
+  ;; Note: when looking for prev/next sibling, it might be tempting to
+  ;; directly look at prev/next property change, but this would be
+  ;; correct only by accident - there might be any scopes in different
+  ;; nests in between.
+  (if (and enc (eq (javaimp-scope-type enc) 'method))
+      enc
+    (if-let* ((next (seq-find
+                     (lambda (s)
+                       (>= (javaimp-scope-open-brace s) pos))
+                     siblings))
+              (next-beg-decl
+               (javaimp--beg-of-defun-decl
+                (javaimp-scope-start next) parent-beg))
+              (beg-decl
+               (let ((tmp pos))
+                 ;; pos may be inside arg list or some other nested
+                 ;; construct, move out
+                 (while (and tmp
+                             ;; Note that case when both are nil is
+                             ;; also correct: there's no parent and
+                             ;; we're outside of any scope.
+                             (not (eql parent-beg (nth 1 (syntax-ppss tmp)))))
+                   (setq tmp (nth 1 (syntax-ppss tmp))))
+                 (when tmp
+                   (javaimp--beg-of-defun-decl tmp parent-beg))))
+              ((= next-beg-decl beg-decl)))
+        ;; If we're inside next's declaration - behave as if we were
+        ;; inside its body, so it becomes our prev
+        next
+      ;; Just find previous defun
+      (seq-find (lambda (s)
+                  (< (javaimp-scope-open-brace s) pos))
+                (reverse siblings)))))
 
 (defun javaimp-jump-to-enclosing-scope ()
   "Jump to enclosing scope at point."

@@ -515,12 +515,11 @@ lambdas are also recognized as such."
 
 (defun javaimp-parse--scope-method-or-stmt (brace-pos)
   "Attempt to parse `method' or `statement' scope."
-  ;; Take the closest preceding closing paren as the bound
-  (let ((throws-search-bound (when (javaimp-parse--rsb-keyword ")" nil t 1)
-                               (1+ (point)))))
-    (when throws-search-bound
+  (let ((arglist-end (when (javaimp-parse--rsb-keyword ")" nil t 1)
+                       (1+ (point)))))
+    (when arglist-end
       (let* ((throws-start (javaimp-parse--decl-suffix
-                            "\\_<throws\\_>" brace-pos throws-search-bound))
+                            "\\_<throws\\_>" brace-pos arglist-end))
              (throws-args (when throws-start
                             (or (javaimp-parse--arglist
                                  (+ throws-start (length "throws")) brace-pos t)
