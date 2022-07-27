@@ -4,7 +4,7 @@
 
 ;; Author: Filipp Gunbin <fgunbin@fastmail.fm>
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
-;; Version: 0.8
+;; Version: 0.9
 ;; Keywords: java, maven, gradle, programming
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -789,8 +789,8 @@ form as CLASS-ALIST in return value of
 (defsubst javaimp-imenu--make-entry (scope)
   (list (javaimp-scope-name scope)
         (if imenu-use-markers
-            (copy-marker (javaimp-scope-start scope))
-          (javaimp-scope-start scope))
+            (copy-marker (javaimp-scope-open-brace scope))
+          (javaimp-scope-open-brace scope))
         #'javaimp-imenu--function
         scope))
 
@@ -876,10 +876,10 @@ nested in methods are not included, see
                    (not (javaimp-scope-parent s)))
                  scopes))))
 
-(defun javaimp-imenu--function (_index-name index-position _scope)
+(defun javaimp-imenu--function (_index-name index-position scope)
   (if-let ((decl-beg (javaimp--beg-of-defun-decl index-position)))
       (goto-char decl-beg)
-    (goto-char index-position)
+    (goto-char (javaimp-scope-start scope))
     (back-to-indentation)))
 
 
@@ -1083,27 +1083,29 @@ buffer."
       (cond ((and (>= target-idx 0)
                   (< target-idx (length siblings)))
              ;; Move to target sibling
-             (let ((scope (nth target-idx siblings)))
-               (goto-char (or (javaimp--beg-of-defun-decl
-                               (javaimp-scope-start scope) parent-start)
-                              (javaimp-scope-open-brace scope)))))
+             (let* ((scope (nth target-idx siblings))
+                    (pos (javaimp-scope-open-brace scope)))
+               (goto-char (or (javaimp--beg-of-defun-decl pos parent-start)
+                              pos))))
             (siblings
              ;; Move to start of first/last sibling
-             (goto-char (javaimp-scope-open-brace
-                         (car (if (< target-idx 0)
-                                  siblings
-                                (last siblings))))))
+             (let* ((scope (car (if (< target-idx 0)
+                                    siblings
+                                  (last siblings))))
+                    (pos (javaimp-scope-open-brace scope)))
+               (goto-char (or (javaimp--beg-of-defun-decl pos) pos))))
             (parent-start
              (goto-char parent-start)
-             ;; Move forward one line unless closing brace is on the
-             ;; same line
              (let ((parent-end (ignore-errors
                                  (scan-lists parent-start 1 0))))
-               (unless (and parent-end
-                            (= (line-number-at-pos parent-start)
-                               (line-number-at-pos parent-end)))
+               (if (and parent-end
+                        (= (line-number-at-pos parent-start)
+                           (line-number-at-pos parent-end)))
+                   ;; open / close braces are on the same line
+                   (forward-char)
                  (forward-line))))
             (t
+             ;; There're no siblings and no parent
              (goto-char (if (< target-idx 0)
                             (point-min) (point-max))))))))
 
@@ -1118,11 +1120,18 @@ than BOUND.  POS should not be in arglist or similar list."
 
 (defun javaimp-end-of-defun ()
   "Function to be used as `end-of-defun-function'."
-  ;; Called after beginning-of-defun-raw, so we can safely inspect
-  ;; properties
+  ;; This function is called after javaimp-beginning-of-defun, which
+  ;; in the normal course will position the point before the
+  ;; open-brace, so we can inspect property.
   (when-let* ((brace-pos
                (next-single-property-change (point) 'javaimp-parse-scope))
-              ((get-text-property brace-pos 'javaimp-parse-scope)))
+              ((get-text-property brace-pos 'javaimp-parse-scope))
+              ;; When there're no siblings, javaimp-beginning-of-defun
+              ;; moves to the parent start.  In this case we should
+              ;; stay inside the parent.
+              ((eql (nth 1 (syntax-ppss))
+                    (save-excursion
+                      (nth 1 (syntax-ppss brace-pos))))))
     (ignore-errors
       (goto-char
        (scan-lists brace-pos 1 0)))))
@@ -1192,7 +1201,7 @@ PREV-INDEX gives the index of the method itself."
                      siblings))
               (next-beg-decl
                (javaimp--beg-of-defun-decl
-                (javaimp-scope-start next) parent-beg))
+                (javaimp-scope-open-brace next) parent-beg))
               (beg-decl
                (let ((tmp pos))
                  ;; pos may be inside arg list or some other nested
@@ -1226,7 +1235,7 @@ PREV-INDEX gives the index of the method itself."
                             (not (memq (javaimp-scope-type scope)
                                        '(array-init simple-statement statement)))
                             (javaimp--beg-of-defun-decl
-                             (javaimp-scope-start scope)))
+                             (javaimp-scope-open-brace scope)))
                        (javaimp-scope-start scope)))
         (message "%s %s at position %d"
                  (javaimp-scope-type scope) (javaimp-scope-name scope)
