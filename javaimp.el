@@ -4,7 +4,7 @@
 
 ;; Author: Filipp Gunbin <fgunbin@fastmail.fm>
 ;; Maintainer: Filipp Gunbin <fgunbin@fastmail.fm>
-;; Version: 0.9
+;; Version: 0.9.1
 ;; Keywords: java, maven, gradle, programming
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -100,7 +100,7 @@
 ;; / module, it parses dependency archives, as well as JDK ones, and
 ;; it may take quite a while.
 ;;
-;; `javaimp-organize-import': command to organize imports in the
+;; `javaimp-organize-imports': command to organize imports in the
 ;; current buffer, sorting and deleting duplicates.
 ;;
 ;; If you don't visit a project, then Javaimp tries to determine
@@ -1308,6 +1308,7 @@ defun javadoc to be included in the narrowed region when using
         (add-hook 'xref-backend-functions #'javaimp-xref--backend nil t)
         (setq-local parse-sexp-ignore-comments t)
         (setq-local multibyte-syntax-as-symbol t)
+        (setq-local end-of-defun-moves-to-eol nil)
         ;; Discard parse state, if any
         (setq javaimp-parse--dirty-pos nil)
         (setq syntax-ppss-table java-mode-syntax-table)
@@ -1325,6 +1326,7 @@ defun javadoc to be included in the narrowed region when using
     (remove-hook 'xref-backend-functions #'javaimp-xref--backend t)
     (kill-local-variable 'parse-sexp-ignore-comments)
     (kill-local-variable 'multibyte-syntax-as-symbol)
+    (kill-local-variable 'end-of-defun-moves-to-eol)
     (kill-local-variable 'imenu-space-replacement)))
 
 
