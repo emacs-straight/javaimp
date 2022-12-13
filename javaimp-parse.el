@@ -131,7 +131,7 @@ everything's up-to-date.")
       str)))
 
 (defun javaimp-parse--rsb-keyword (regexp &optional bound noerror count)
-  "Like `re-search-backward', but count only occurences which start
+  "Like `re-search-backward', but count only occurrences which start
 outside any syntactic context as given by `syntax-ppss-context'.
 Assumes point is outside of any context initially."
   (or count (setq count 1))
