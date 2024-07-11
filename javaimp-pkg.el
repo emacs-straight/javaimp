@@ -1,0 +1,2 @@
+;; Generated package description from javaimp.el  -*- no-byte-compile: t -*-
+(define-package "javaimp" "0.9.1.0.20221221.80314" "Add and reorder Java import statements in Maven/Gradle projects" 'nil :commit "dcde3d417fcf9e2884f0c7314fdd248b7f4ca687" :url "https://elpa.gnu.org/packages/javaimp.html" :authors '(("Filipp Gunbin" . "fgunbin@fastmail.fm")) :maintainer '("Filipp Gunbin" . "fgunbin@fastmail.fm") :keywords '("java" "maven" "gradle" "programming"))
