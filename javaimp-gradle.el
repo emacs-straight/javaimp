@@ -28,6 +28,28 @@ gradlew (Gradle wrapper), it is used in preference."
   :type 'string
   :group 'javaimp)
 
+(defcustom javaimp-gradle-args
+  '("-Dorg.gradle.caching=false"        ;CLI option --build-cache
+    "-Dorg.gradle.configuration-cache=false" ;CLI option --configuration-cache
+    "-Dorg.gradle.unsafe.configuration-cache=false" ;old name for it
+    ;; As of Feb 2026, isolated projects is in pre-alpha, so only the
+    ;; "unsafe" property exists.  Most likely it will be renamed by
+    ;; dropping the "unsafe" part, so add both.
+    "-Dorg.gradle.isolated-projects=false"
+    "-Dorg.gradle.unsafe.isolated-projects=false"
+    )
+  "Args to pass to gradle invocation.
+
+The default value disables build and configuration cache.
+
+The following arguments are always passed to Gradle (do not set them here):
+\"-Dorg.gradle.console=plain\"
+\"-Dorg.gradle.java.compile-classpath-packaging=true\"
+\"-Dorg.gradle.parallel=false\"
+\"-Dorg.gradle.warning.mode=none\"
+\"-Dorg.gradle.welcome=never\""
+  :type '(repeat (string :tag "Gradle CLI argument"))
+  :group 'javaimp)
 
 (defun javaimp-gradle-visit (file)
   "Calls gradle on FILE to get various project information.
@@ -85,8 +107,8 @@ descriptor."
                (cdr (assq 'parent-id alist)))
    :file (cdr (assq 'file alist))
    :file-orig file-orig
-   :artifact (when-let ((final-name (javaimp-cygpath-convert-file-name
-                                     (cdr (assq 'final-name alist)))))
+   :artifact (when-let* ((final-name (javaimp-cygpath-convert-file-name
+                                      (cdr (assq 'final-name alist)))))
                ;; only jar/war supported
                (and (member (file-name-extension final-name) '("jar" "war"))
                     final-name))
@@ -104,19 +126,24 @@ descriptor."
 
 (defun javaimp-gradle--id-from-semi-separated (str)
   (when str
-    (let ((parts (split-string str ";" t))
-          artifact)
+    (let ((parts (split-string str ";"))
+          group artifact version)
       (unless (= (length parts) 3)
         (error "Invalid project id: %s" str))
-      (setq artifact (nth 1 parts))
+      (setq group (nth 0 parts)
+            artifact (nth 1 parts)
+            version (nth 2 parts))
       (if (equal artifact ":")
           (setq artifact "<root>")
         ;; convert "[:]foo:bar:baz" into "foo.bar.baz"
         (setq artifact (replace-regexp-in-string
                         ":" "." (string-remove-prefix ":" artifact))))
-      (make-javaimp-id :group (nth 0 parts)
-                       :artifact artifact
-                       :version (nth 2 parts)))))
+      (make-javaimp-id :group (if (string-blank-p group)
+                                  "<unspecified_group>" group)
+                       :artifact (if (string-blank-p artifact)
+                                  "<unspecified_artifact>" artifact)
+                       :version (if (string-blank-p version)
+                                    "<unspecified_version>" version)))))
 
 (defun javaimp-gradle--fetch-dep-jars (module ids)
   (javaimp-gradle--call
@@ -138,7 +165,7 @@ descriptor."
          ;; in build file directory.
          (default-directory (file-name-directory file))
          ;; Prefer local gradle wrapper
-         (local-gradlew (if (eq system-type '(windows-nt))
+         (local-gradlew (if (eq system-type 'windows-nt)
                             "gradlew.bat"
                           "gradlew"))
          (program (if (file-exists-p local-gradlew)
@@ -146,18 +173,26 @@ descriptor."
                     javaimp-gradle-program))
          (task (concat mod-path "javaimpTask")))
     (message "Calling Gradle task %s on %s ..." task file)
-    (javaimp-call-java-program
+    (apply
+     #'javaimp-call-java-program
      program
      handler
-     "-q"
-     ;; It's easier for us to track jars instead of classes for
-     ;; java-library projects.  See
-     ;; https://docs.gradle.org/current/userguide/java_library_plugin.html#sec:java_library_classes_usage
-     "-Dorg.gradle.java.compile-classpath-packaging=true"
-     "--no-configuration-cache"
-     "-I" (javaimp-cygpath-convert-file-name
-           (expand-file-name "javaimp-init-script.gradle"
-                             (file-name-concat javaimp-basedir "support")))
-     task)))
+     (append
+      javaimp-gradle-args
+      (list "-q"
+            "-Dorg.gradle.console=plain"
+            ;; It's easier for us to track jars instead of classes for
+            ;; java-library projects.  See
+            ;; https://docs.gradle.org/current/userguide/java_library_plugin.html#sec:java_library_classes_usage
+            "-Dorg.gradle.java.compile-classpath-packaging=true"
+            ;; We need sequential task output for parsing
+            "-Dorg.gradle.parallel=false"
+            "-Dorg.gradle.warning.mode=none"
+            "-Dorg.gradle.welcome=never"
+            "-I" (javaimp-cygpath-convert-file-name
+                  (expand-file-name "javaimp-init-script.gradle"
+                                    (file-name-concat javaimp-basedir "support")))
+            "--"
+            task)))))
 
 (provide 'javaimp-gradle)

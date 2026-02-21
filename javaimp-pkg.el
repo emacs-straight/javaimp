@@ -1,2 +1,2 @@
-;; Generated package description from javaimp.el  -*- no-byte-compile: t -*-
-(define-package "javaimp" "0.9.1.0.20241129.211411" "Add and reorder Java import statements in Maven/Gradle projects" 'nil :commit "7136693be13aaad4a4f6f49bd89489867b7efcd9" :url "https://elpa.gnu.org/packages/javaimp.html" :authors '(("Filipp Gunbin" . "fgunbin@fastmail.fm")) :maintainer '("Filipp Gunbin" . "fgunbin@fastmail.fm") :keywords '("java" "maven" "gradle" "programming"))
+;; Generated package description from javaimp.el  -*- no-byte-compile: t; lexical-binding:t -*-
+(define-package "javaimp" "0.9.1.0.20260220.205136" "Add and reorder Java import statements in Maven/Gradle projects" 'nil :commit "c739954cdc2f4c34187b014dc31c215f26eb2b27" :url "https://elpa.gnu.org/packages/javaimp.html" :authors '(("Filipp Gunbin" . "fgunbin@fastmail.fm")) :maintainer '("Filipp Gunbin" . "fgunbin@fastmail.fm") :keywords '("java" "maven" "gradle" "programming"))
