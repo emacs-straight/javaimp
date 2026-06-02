@@ -926,10 +926,10 @@ children."
 
 (defun javaimp-show-scopes-goto-scope (event &optional to-start)
   "Go to the opening brace (`javaimp-scope-open-brace') of the scope.
-Target scope is determined by location of mouse EVENT, if it's
-non-nil.  Else, take the scope at current line.  When TO-START is
-non-nil, go to scope start (`javaimp-scope-start') instead of the
-opening brace."
+Target scope is determined by location of mouse EVENT, if it's non-nil.
+Else, take the scope at current line.  When TO-START is
+non-nil (interactively, a prefix arg), go to scope
+start (`javaimp-scope-start') instead of the opening brace."
   (interactive (list last-nonmenu-event current-prefix-arg))
   (let* ((buf (current-buffer))
          (scopes-buf (if event
@@ -955,33 +955,38 @@ opening brace."
   (setq-local revert-buffer-function #'javaimp-show-scopes-revert)
   (setq next-error-function #'javaimp-show-scopes-next-error))
 
-(defun javaimp-show-scopes ()
-  "Show scopes in *javaimp-scopes* buffer."
-  (interactive)
+(defun javaimp-show-scopes (&optional all)
+  "Show scopes in *javaimp-scopes* buffer.
+By default, only type & method scopes are displayed, but if ALL is
+non-nil (interactively, a prefix arg) then no filtering is done.  This
+is useful mainly for debugging."
+  (interactive (list current-prefix-arg))
   (display-buffer
-   (javaimp-show-scopes-1 (current-buffer))))
+   (javaimp-show-scopes-1 (current-buffer) all)))
 
 (defun javaimp-show-scopes-revert (_ignore1 _ignore2)
   "Function to be used as `revert-buffer-function' in
 `javaimp-show-scopes-mode' buffers."
   (let ((source-buf
          (get-file-buffer
-          (get-text-property (point-min) 'javaimp-show-scopes-file))))
+          (get-text-property (point-min) 'javaimp-show-scopes-file)))
+        (all (get-text-property (point-min) 'javaimp-show-scopes-all)))
     (if source-buf
-        (javaimp-show-scopes-1 source-buf)
+        (javaimp-show-scopes-1 source-buf all)
       (user-error "Source buffer has been killed"))))
 
-(defun javaimp-show-scopes-1 (source-buf)
-  "Subroutine of `javaimp-show-scopes', outputs scopes from
-SOURCE-BUF in *javaimp-scopes* buffer.  Returns resulting
-buffer."
+(defun javaimp-show-scopes-1 (source-buf all)
+  "Subroutine of `javaimp-show-scopes', displays scopes from
+SOURCE-BUF in *javaimp-scopes* buffer.  Returns resulting buffer.  By
+default, only type & method scopes are displayed, but if ALL is non-nil
+then no filtering is done."
   (let ((scopes
          (with-current-buffer source-buf
            (save-excursion
              (save-restriction
                (widen)
                (javaimp-parse-get-all-scopes
-                nil nil (javaimp-scope-defun-p t))))))
+                nil nil (unless all (javaimp-scope-defun-p t)))))))
         (default-dir
          (with-current-buffer source-buf
            default-directory))
@@ -993,7 +998,8 @@ buffer."
             (buffer-undo-list t))
         (erase-buffer)
         (insert (propertize (format "%s" (buffer-file-name source-buf))
-                            'javaimp-show-scopes-file (buffer-file-name source-buf))
+                            'javaimp-show-scopes-file (buffer-file-name source-buf)
+                            'javaimp-show-scopes-all all)
                 "\n\n")
         (dolist (scope scopes)
           (let ((depth 0)
@@ -1102,19 +1108,29 @@ than BOUND.  POS should not be in arglist or similar list."
   "Function to be used as `end-of-defun-function'."
   ;; This function is called after javaimp-beginning-of-defun, which
   ;; in the normal course will position the point before the
-  ;; open-brace, so we can inspect property.
-  (when-let* ((brace-pos
-               (next-single-property-change (point) 'javaimp-parse-scope))
-              (_ (get-text-property brace-pos 'javaimp-parse-scope))
-              ;; When there're no siblings, javaimp-beginning-of-defun
-              ;; moves to the parent start.  In this case we should
-              ;; stay inside the parent.
-              (_ (eql (nth 1 (syntax-ppss))
-                      (save-excursion
-                        (nth 1 (syntax-ppss brace-pos))))))
-    (ignore-errors
-      (goto-char
-       (scan-lists brace-pos 1 0)))))
+  ;; open-brace (for example, where javaimp--beg-of-defun-decl puts
+  ;; it), so we look for next property change.  However we need to
+  ;; skip any array-init scopes which may occur within annotation
+  ;; values, like "@Annotation({"val1"})".
+  (let ((pos (point)))
+    (while-let ((_ pos)
+                (brace-pos (next-single-property-change pos 'javaimp-parse-scope))
+                (scope (get-text-property brace-pos 'javaimp-parse-scope))
+                (_ (eq (javaimp-scope-type scope) 'array-init)))
+      (setq pos (ignore-errors (scan-lists brace-pos 1 0))))
+    (when-let* ((_ pos)
+                (brace-pos (next-single-property-change pos 'javaimp-parse-scope))
+                (_ (get-text-property brace-pos 'javaimp-parse-scope))
+                ;; When there're no siblings,
+                ;; javaimp-beginning-of-defun moves to the parent
+                ;; start.  In this case we should stay inside the
+                ;; parent.
+                (_ (eql (nth 1 (syntax-ppss))
+                        (save-excursion
+                          (nth 1 (syntax-ppss brace-pos))))))
+      (ignore-errors
+        (goto-char
+         (scan-lists brace-pos 1 0))))))
 
 (defun javaimp--get-sibling-context ()
   "Return list of the form (PARENT-START PREV-INDEX .

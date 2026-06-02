@@ -192,7 +192,10 @@ skipping further backwards is done by the caller."
                     (if last-pos (goto-char last-pos))
                     (and (looking-at "\\_<")
                          ;; Do not stop at vararg ellipsis like in
-                         ;; List<String>...
+                         ;; "List<String>... ".  FIXME Support other
+                         ;; cases when ws is put before/after
+                         ;; ellipsis, or no ws at all, which is valid
+                         ;; Java syntax, although discouraged.
                          (not (string= (current-word t) "..."))))))))
         (progn
           (unless (eq last-skip t)
@@ -763,7 +766,7 @@ either of symbols `normal' or `static'."
     (cons (and start-pos end-pos (cons start-pos end-pos))
           class-alist)))
 
-(defun javaimp-parse-get-all-scopes (&optional beg end pred no-filter)
+(defun javaimp-parse-get-all-scopes (&optional beg end pred no-filter-parents)
   "Return copies of all scopes in the current buffer between
 positions BEG and END, both exclusive, optionally filtering them
 with PRED.  PRED should not move point.  Note that parents may be
@@ -772,7 +775,7 @@ argument to `previous-single-property-change', and so may be nil.
 END defaults to end of accessible portion of the buffer.
 
 Scope parents are filtered according to
-`javaimp-parse--scope-type-defun-p', but if NO-FILTER is non-nil
+`javaimp-parse--scope-type-defun-p', but if NO-FILTER-PARENTS is non-nil
 then no filtering is done."
   (javaimp-parse--all-scopes)
   (let ((pos (or end (point-max)))
@@ -788,7 +791,7 @@ then no filtering is done."
                      (funcall pred scope)))
         (setq scope
               (javaimp-scope-copy
-               scope (unless no-filter #'javaimp-parse--scope-type-defun-p)
+               scope (unless no-filter-parents #'javaimp-parse--scope-type-defun-p)
                scope-alist))
         (push scope res)
         ;; Fill alist going up.  Stop at the first already existing
@@ -801,18 +804,18 @@ then no filtering is done."
               (setq tmp (javaimp-scope-parent tmp)))))))
     res))
 
-(defun javaimp-parse-get-enclosing-scope (&optional pred no-filter)
+(defun javaimp-parse-get-enclosing-scope (&optional pred no-filter-parents)
   "Return copy of innermost enclosing scope at point.  If PRED is
 non-nil then the scope must satisfy it, otherwise the next outer
 scope is tried.
 
 Scope parents are filtered according to
-`javaimp-parse--scope-type-defun-p', but if NO-FILTER is non-nil
+`javaimp-parse--scope-type-defun-p', but if NO-FILTER-PARENTS is non-nil
 then no filtering is done."
   (save-excursion
     (javaimp-parse--all-scopes))
   (when-let* ((scope (javaimp-parse--enclosing-scope pred)))
-    (javaimp-scope-copy scope (unless no-filter
+    (javaimp-scope-copy scope (unless no-filter-parents
                                 #'javaimp-parse--scope-type-defun-p))))
 
 (defun javaimp-parse-get-defun-decl-start (pos &optional bound)
